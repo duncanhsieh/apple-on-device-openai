@@ -195,6 +195,9 @@ struct ChatView: View {
     @State private var imageURLInput = ""
     @State private var isDropTargeted = false
 
+    /// Height of one composer line; the attach button, field and send button all share it
+    private static let composerRowHeight: CGFloat = 28
+
     private static let suggestions = [
         "Write a haiku about autumn in Taipei",
         "Explain recursion to a ten-year-old",
@@ -236,14 +239,27 @@ struct ChatView: View {
         .frame(minWidth: 420, minHeight: 360)
         .toolbar {
             ToolbarItem(placement: .primaryAction) {
-                Picker("Model", selection: $chat.selectedModel) {
-                    ForEach(AppleModel.allCases, id: \.self) { model in
-                        Text(model.displayName)
-                            .tag(model)
-                            .selectionDisabled(!model.availability().available)
+                Menu {
+                    Picker("Model", selection: $chat.selectedModel) {
+                        ForEach(AppleModel.allCases, id: \.self) { model in
+                            Text(model.displayName)
+                                .tag(model)
+                                .selectionDisabled(!model.availability().available)
+                        }
                     }
+                    .pickerStyle(.inline)
+                    .labelsHidden()
+                } label: {
+                    HStack(spacing: 6) {
+                        Text(chat.selectedModel.displayName)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 10)
                 }
-                .pickerStyle(.menu)
+                .menuIndicator(.hidden)
+                .fixedSize()
                 .help("Model (switching starts a new chat)")
             }
             ToolbarItem(placement: .primaryAction) {
@@ -312,7 +328,7 @@ struct ChatView: View {
                 AttachmentTray(chat: chat)
             }
 
-            HStack(alignment: .bottom, spacing: 8) {
+            HStack(alignment: .bottom, spacing: 6) {
                 if chat.supportsImages {
                     Menu {
                         Button("Choose Image…", systemImage: "photo") {
@@ -329,9 +345,9 @@ struct ChatView: View {
                     .menuStyle(.button)
                     .menuIndicator(.hidden)
                     .buttonStyle(.borderless)
-                    .buttonBorderShape(.circle)
                     .fixedSize()
-                    .frame(height: 22)
+                    // Menu ignores its label's frame, so size the menu itself to the row
+                    .frame(width: Self.composerRowHeight, height: Self.composerRowHeight)
                     .disabled(chat.isResponding)
                     .help("Attach an image, or drop one onto the chat")
                 }
@@ -341,7 +357,9 @@ struct ChatView: View {
                     .lineLimit(1...8)
                     .focused($isInputFocused)
                     .onSubmit { chat.send() }
-                    .frame(minHeight: 22)
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 6)
+                    .frame(minHeight: Self.composerRowHeight)
 
                 if chat.isResponding {
                     Button {
@@ -349,6 +367,7 @@ struct ChatView: View {
                     } label: {
                         Image(systemName: "stop.circle.fill")
                             .font(.system(size: 22))
+                            .frame(width: Self.composerRowHeight, height: Self.composerRowHeight)
                     }
                     .buttonStyle(.borderless)
                     .help("Stop responding")
@@ -359,15 +378,16 @@ struct ChatView: View {
                         Image(systemName: "arrow.up.circle.fill")
                             .font(.system(size: 22))
                             .foregroundStyle(chat.canSend ? Color.accentColor : Color.secondary)
+                            .frame(width: Self.composerRowHeight, height: Self.composerRowHeight)
                     }
                     .buttonStyle(.borderless)
                     .disabled(!chat.canSend)
                     .help("Send")
                 }
             }
-            .padding(.leading, chat.supportsImages ? 6 : 12)
-            .padding(.trailing, 5)
-            .padding(.vertical, 5)
+            .padding(.leading, chat.supportsImages ? 4 : 10)
+            .padding(.trailing, 4)
+            .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 18, style: .continuous)
                     .fill(.background)

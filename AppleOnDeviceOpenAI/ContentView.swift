@@ -415,37 +415,39 @@ struct ModelRow: View {
     let status: ModelStatus
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 8) {
-            Circle()
-                .fill(status.available ? Color.green : Color.secondary.opacity(0.5))
-                .frame(width: 6, height: 6)
-                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(status.available ? Color.green : Color.secondary.opacity(0.5))
+                    .frame(width: 6, height: 6)
 
-            VStack(alignment: .leading, spacing: 2) {
                 Text(status.id)
                     .font(.system(.callout, design: .monospaced))
                     .foregroundStyle(status.available ? .primary : .secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                if let reason = status.reason {
-                    Text(reason)
-                        .font(.caption)
+
+                Spacer(minLength: 0)
+
+                if status.available && status.imageInput {
+                    Image(systemName: "photo")
+                        .iconFrame()
                         .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                        .help("Accepts images")
+                }
+
+                if status.available {
+                    CopyButton(text: status.id)
                 }
             }
+            .frame(minHeight: IconMetrics.size)
 
-            Spacer(minLength: 0)
-
-            if status.available && status.imageInput {
-                Image(systemName: "photo")
+            if let reason = status.reason {
+                Text(reason)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .help("Accepts images")
-            }
-
-            if status.available {
-                CopyButton(text: status.id)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 14)
             }
         }
     }
@@ -512,10 +514,25 @@ struct CopyButton: View {
             Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
                 .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(didCopy ? Color.green : Color.secondary)
-                .frame(width: 16)
+                .iconFrame()
         }
         .buttonStyle(.borderless)
         .help("Copy")
+    }
+}
+
+/// Shared size for small inline icons and icon buttons so they line up in rows
+enum IconMetrics {
+    static let size: CGFloat = 18
+}
+
+extension View {
+    /// Centers an SF Symbol in a fixed square so icons of different shapes align
+    func iconFrame(_ size: CGFloat = IconMetrics.size) -> some View {
+        self
+            .font(.system(size: 12, weight: .regular))
+            .imageScale(.medium)
+            .frame(width: size, height: size)
     }
 }
 

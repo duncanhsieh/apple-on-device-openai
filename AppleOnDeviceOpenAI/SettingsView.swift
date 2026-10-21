@@ -67,13 +67,20 @@ struct ServerSettingsView: View {
                             viewModel.refreshAddresses()
                         } label: {
                             Image(systemName: "arrow.clockwise")
+                                .iconFrame()
                         }
                         .buttonStyle(.borderless)
                         .help("Rescan network interfaces")
                     }
                 }
 
-                TextField("Port", text: $viewModel.portInput, prompt: Text("11535"))
+                LabeledContent("Port") {
+                    TextField("Port", text: $viewModel.portInput, prompt: Text("11535"))
+                        .labelsHidden()
+                        .textFieldStyle(.roundedBorder)
+                        .multilineTextAlignment(.trailing)
+                        .frame(width: 80)
+                }
             } footer: {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 6) {
