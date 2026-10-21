@@ -262,6 +262,8 @@ struct ChatView: View {
                 .fixedSize()
                 .help("Model (switching starts a new chat)")
             }
+            // Adjacent items share one glass capsule; keep the picker and New Chat apart
+            ToolbarSpacer(.fixed, placement: .primaryAction)
             ToolbarItem(placement: .primaryAction) {
                 Button("New Chat", systemImage: "square.and.pencil") {
                     chat.reset()
