@@ -41,6 +41,10 @@ class VaporServerManager: ObservableObject {
             // Fix for running Vapor in iOS/macOS app - clear command line arguments
             app.environment.arguments = [app.environment.arguments[0]]
 
+            // Vapor's 16 KB default rejects base64 image_url payloads; base64 adds a third,
+            // so this fits a couple of images at ImageLoader's 20 MB limit
+            app.routes.defaultMaxBodySize = "64mb"
+
             // Configure routes
             configureRoutes(app)
 

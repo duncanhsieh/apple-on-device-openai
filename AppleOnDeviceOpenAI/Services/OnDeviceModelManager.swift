@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import FoundationModels
+import Security
 import Vapor
 
 // MARK: - Model Selection
@@ -38,6 +39,13 @@ nonisolated enum AppleModel: String, CaseIterable, Sendable {
             guard #available(macOS 27.0, *) else {
                 return (false, "Private Cloud Compute requires macOS 27 or later")
             }
+            // Without the entitlement every request fails with "Operation not permitted"
+            guard Self.hasPrivateCloudComputeEntitlement else {
+                return (
+                    false,
+                    "Private Cloud Compute requires the \(Self.privateCloudComputeEntitlement) entitlement; sign the app with your Apple Developer team"
+                )
+            }
             switch PrivateCloudComputeLanguageModel().availability {
             case .available:
                 return (true, nil)
@@ -62,7 +70,8 @@ nonisolated enum AppleModel: String, CaseIterable, Sendable {
         case .onDevice:
             return SystemLanguageModel.default.capabilities.contains(.vision)
         case .onDeviceContentTagging:
-            return SystemLanguageModel(useCase: .contentTagging).capabilities.contains(.vision)
+            // Reports .vision, but prompts with images fail with "Unable to tokenize prompt"
+            return false
         case .privateCloudCompute:
             return PrivateCloudComputeLanguageModel().capabilities.contains(.vision)
         }
@@ -78,6 +87,16 @@ nonisolated enum AppleModel: String, CaseIterable, Sendable {
         #else
         return "Image input requires macOS 27 and an app built with Xcode 27"
         #endif
+    }
+
+    private static let privateCloudComputeEntitlement = "com.apple.developer.private-cloud-compute"
+
+    private static var hasPrivateCloudComputeEntitlement: Bool {
+        guard let task = SecTaskCreateFromSelf(nil),
+            let value = SecTaskCopyValueForEntitlement(
+                task, privateCloudComputeEntitlement as CFString, nil)
+        else { return false }
+        return (value as? Bool) ?? true
     }
 
     func makeSession(transcript: Transcript) -> LanguageModelSession {
@@ -427,7 +446,8 @@ nonisolated struct GenerationFailure: AbortError {
         }
 
         self.init(
-            .internalServerError, "Error generating response: \(message)",
+            .internalServerError,
+            "Error generating response: \(message)",
             errorType: "internal_error", code: nil)
     }
 

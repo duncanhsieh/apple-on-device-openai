@@ -66,6 +66,8 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 - Enum of models selectable through the OpenAI `model` field: `apple-on-device`, `apple-on-device-content-tagging`, `apple-private-cloud-compute`
 - `init(requested:)` falls back to `apple-on-device` for unknown ids
 - `availability()`, `supportsImages` and `makeSession(transcript:)` per model; PCC is only available on macOS 27+
+- PCC needs the `com.apple.developer.private-cloud-compute` entitlement (system log shows the model policy's `entitlementOverride`, `blockSideloadedApps: true`); without it session creation fails with ModelManagerError 1046 "Operation not permitted", so `availability()` checks the entitlement with `SecTaskCopyValueForEntitlement` first
+- Content tagging reports `.vision` but image prompts fail with ModelManagerError 1001 "Unable to tokenize prompt", so `supportsImages` returns false for it
 
 **VaporServerManager** (`Services/VaporServerManager.swift`)
 - Main HTTP server using the Vapor framework
@@ -73,6 +75,7 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 - Configures OpenAI-compatible API routes
 - Handles both streaming and non-streaming responses
 - **Important**: Bootstraps logging system only once per process to avoid errors when restarting server
+- Raises `app.routes.defaultMaxBodySize` to 64 MB; Vapor's 16 KB default returns 413 for base64 `image_url` payloads
 
 **OnDeviceModelManager** (`Services/OnDeviceModelManager.swift`)
 - Actor-isolated manager for Apple's SystemLanguageModel
@@ -152,5 +155,6 @@ Server configuration (host/port) is stored in ServerConfiguration struct. The UI
 
 ## Known Issues
 
+- Some framework failures arrive as a raw `NSError` (domain `FoundationModels.LanguageModelError`, code -1, wrapping a private `ModelManagerServices.ModelManagerError`) instead of the `LanguageModelError` enum, so they map to a 500. Read details with `/usr/bin/log show --predicate 'process CONTAINS "modelmanager"'` (zsh's `log` builtin shadows `/usr/bin/log`)
 - Rate limiting may still occur due to Apple FoundationModels limitations - restart the server if this happens
 - Logging system can only be initialized once per process (handled by `loggingBootstrapped` flag)

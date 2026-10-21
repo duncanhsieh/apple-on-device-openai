@@ -30,7 +30,7 @@ Use it in any OpenAI compatible app:
 - **macOS**: 26.0 or later (macOS 27 supported)
 - **Apple Intelligence**: Must be enabled in Settings > Apple Intelligence & Siri
 - **Xcode**: 26.0 or later (for building); Xcode 27 is needed for Private Cloud Compute, image input and the macOS 27 error types
-- **Private Cloud Compute** (optional): macOS 27 or later; on older systems the model is reported as unavailable
+- **Private Cloud Compute** (optional): macOS 27 or later, and the app must be signed with your Apple Developer team with the `com.apple.developer.private-cloud-compute` entitlement (ad-hoc/unsigned builds are refused by the system); otherwise the model is reported as unavailable
 
 ### Compatibility
 
@@ -38,8 +38,8 @@ Use it in any OpenAI compatible app:
 |---|---|---|---|
 | Text chat, multi-turn, streaming | ✅ | ✅ | ✅ |
 | OpenAI-style error codes (429, `context_length_exceeded`, …) | ✅ | Partial (macOS 27 errors are reported as 500) | ✅ |
-| Private Cloud Compute model | ❌ (HTTP 503) | ❌ (HTTP 503) | ✅ |
-| Image input (`image_url`, chat attachments) | ❌ (HTTP 400) | ❌ (HTTP 400) | ✅ (if the model reports vision support) |
+| Private Cloud Compute model | ❌ (HTTP 503) | ❌ (HTTP 503) | ✅ (needs the PCC entitlement) |
+| Image input (`image_url`, chat attachments) | ❌ (HTTP 400) | ❌ (HTTP 400) | ✅ `apple-on-device` (and PCC); not `apple-on-device-content-tagging` |
 
 Check `GET /status`: `image_input_supported` (default model) and each entry's `image_input` in `models` tell you whether the running server accepts images.
 
@@ -124,7 +124,7 @@ Pick a model with the OpenAI `model` field:
 |---|---|---|
 | `apple-on-device` | On-device model, general use (default) | macOS 26 + Apple Intelligence |
 | `apple-on-device-content-tagging` | Same on-device model tuned for tagging / classification; returns short tags | macOS 26 + Apple Intelligence |
-| `apple-private-cloud-compute` | Apple's larger server model via Private Cloud Compute | macOS 27 |
+| `apple-private-cloud-compute` | Apple's larger server model via Private Cloud Compute | macOS 27 + `com.apple.developer.private-cloud-compute` entitlement |
 
 - Unknown model IDs (e.g. `gpt-4o` sent by default from existing clients) fall back to `apple-on-device`; the response's `model` field shows the model actually used.
 - Requesting an unavailable model returns HTTP `503` with an OpenAI-style error (streaming requests receive the error as an SSE event).
@@ -188,7 +188,8 @@ response = client.chat.completions.create(
 ```
 
 - Supported URLs: base64 `data:` URLs and `http(s)` URLs (downloaded by the server, 30 s timeout). `file://` and other schemes are rejected.
-- Maximum image size: 20 MB. Any format ImageIO can decode (PNG, JPEG, HEIC, WebP, …) works; the framework scales the image itself.
+- Maximum image size: 20 MB (request bodies up to 64 MB are accepted). Any format ImageIO can decode (PNG, JPEG, HEIC, WebP, …) works; the framework scales the image itself.
+- `apple-on-device-content-tagging` doesn't accept images (the framework fails to tokenize image prompts for that use case), so it returns HTTP 400.
 - Images in earlier user messages stay in the conversation history. Images in earlier `system` and `assistant` messages are ignored. `image_url.detail` is ignored.
 - When images aren't supported, the request fails with HTTP 400 and an `invalid_request_error`.
 - When the server listens on a LAN address, any client that can reach it can make it fetch `http(s)` image URLs.
