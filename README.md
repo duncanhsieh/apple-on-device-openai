@@ -172,6 +172,27 @@ for chunk in response:
         print(chunk.choices[0].delta.content, end="")
 ```
 
+#### Structured output
+
+Pass `response_format` with a JSON Schema to get JSON back:
+
+```python
+response = client.chat.completions.create(
+    model="apple-on-device-content-tagging",
+    messages=[{"role": "user", "content": "Apple unveiled new MacBook Pro models with M5 chips..."}],
+    response_format={"type": "json_schema", "json_schema": {"name": "Topics", "schema": {
+        "type": "object", "required": ["topics"],
+        "properties": {"topics": {"type": "array", "items": {"type": "string"}, "maxItems": 3}},
+    }}},
+)
+print(response.choices[0].message.content)  # {"topics":["Apple","MacBook Pro","M5 chips"]}
+```
+
+- **`apple-on-device` / PCC** use FoundationModels guided generation, so output always matches the schema. Supported: objects (`properties`, `required`), arrays (`items`, `minItems`, `maxItems`), strings (`enum`, `const`, `pattern`), integers and numbers (`minimum`, `maximum`), booleans, `anyOf`/`oneOf`, nullable types and local `$ref` into `$defs`. Properties are generated in `required` order, then optional ones alphabetically.
+- **`apple-on-device-content-tagging`** ignores schemas and instructions but reliably returns comma-separated tags, so the server splits its text and wraps it: the schema must be an array of strings or an object with a single array-of-strings property (`maxItems` trims, `minItems` is enforced). `json_object` returns `{"tags": [...]}`. Other schemas return HTTP 400.
+- Streaming sends the finished JSON as one chunk, since partial JSON isn't valid.
+- Unsupported schema features return HTTP 400 with the reason. `json_object` is only available for content tagging.
+
 #### Image input
 
 Requires macOS 27 and an app built with Xcode 27. Images go in user messages as `image_url` parts:
@@ -226,6 +247,7 @@ This server implements the OpenAI Chat Completions API with the following suppor
 - `temperature` - Sampling temperature
 - `max_completion_tokens` / `max_tokens` - Maximum tokens in response
 - `stream` - Enable streaming responses
+- `response_format` - `text`, or `json_schema` for structured output (see [Structured output](#structured-output))
 
 ## Development Notes
 

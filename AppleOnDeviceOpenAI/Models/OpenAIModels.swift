@@ -27,6 +27,7 @@ nonisolated struct ChatCompletionRequest: Content, Sendable {
     let frequencyPenalty: Double?
     let logitBias: [String: Double]?
     let user: String?
+    let responseFormat: ResponseFormat?
 
     /// `max_completion_tokens` replaces the deprecated `max_tokens` in current OpenAI clients
     var responseTokenLimit: Int? { maxCompletionTokens ?? maxTokens }
@@ -45,6 +46,7 @@ nonisolated struct ChatCompletionRequest: Content, Sendable {
         case frequencyPenalty = "frequency_penalty"
         case logitBias = "logit_bias"
         case user
+        case responseFormat = "response_format"
     }
 
     init(from decoder: Decoder) throws {
@@ -69,6 +71,95 @@ nonisolated struct ChatCompletionRequest: Content, Sendable {
             Double.self, forKey: .frequencyPenalty)
         self.logitBias = try container.decodeIfPresent([String: Double].self, forKey: .logitBias)
         self.user = try container.decodeIfPresent(String.self, forKey: .user)
+        self.responseFormat = try container.decodeIfPresent(
+            ResponseFormat.self, forKey: .responseFormat)
+    }
+}
+
+/// OpenAI `response_format`: `text`, `json_schema` (structured output) or `json_object`
+nonisolated struct ResponseFormat: Content, Sendable {
+    let type: String
+    let jsonSchema: JSONSchemaFormat?
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case jsonSchema = "json_schema"
+    }
+}
+
+nonisolated struct JSONSchemaFormat: Content, Sendable {
+    let name: String?
+    let description: String?
+    let schema: JSONValue?
+    let strict: Bool?
+}
+
+/// Any JSON value, used to carry JSON Schemas through Codable
+nonisolated enum JSONValue: Codable, Sendable, Equatable {
+    case null
+    case bool(Bool)
+    case number(Double)
+    case string(String)
+    case array([JSONValue])
+    case object([String: JSONValue])
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode(Bool.self) {
+            self = .bool(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else if let value = try? container.decode([JSONValue].self) {
+            self = .array(value)
+        } else {
+            self = .object(try container.decode([String: JSONValue].self))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .null: try container.encodeNil()
+        case .bool(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .string(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        case .object(let value): try container.encode(value)
+        }
+    }
+
+    subscript(key: String) -> JSONValue? {
+        if case .object(let object) = self { return object[key] }
+        return nil
+    }
+
+    var string: String? {
+        if case .string(let value) = self { return value }
+        return nil
+    }
+
+    var int: Int? {
+        if case .number(let value) = self { return Int(exactly: value) }
+        return nil
+    }
+
+    var double: Double? {
+        if case .number(let value) = self { return value }
+        return nil
+    }
+
+    var array: [JSONValue]? {
+        if case .array(let value) = self { return value }
+        return nil
+    }
+
+    var object: [String: JSONValue]? {
+        if case .object(let value) = self { return value }
+        return nil
     }
 }
 

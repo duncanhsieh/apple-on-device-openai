@@ -86,6 +86,11 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 - Supports temperature and max_completion_tokens / max_tokens parameters
 - `GenerationFailure` maps generation errors to OpenAI-style error JSON and HTTP status
 
+**JSONSchemaConverter** (`Services/JSONSchemaConverter.swift`)
+- `ResponseFormat.structuredOutput(for:)` picks `StructuredOutput.guided(GenerationSchema)` (JSON Schema → `DynamicGenerationSchema`) or, for content tagging, `.tagList(TagListShape)`
+- Content tagging ignores schemas/instructions (guided generation with it can run away until the context is exhausted), so its comma-separated text is split and wrapped into the requested array / single-array-property object
+- Request bodies decode the schema as `JSONValue`; `Codable` loses key order, so properties follow `required` order
+
 **ImageLoader** (`Services/ImageLoader.swift`)
 - Loads `image_url` values (base64 data URLs and http(s); 20 MB limit, 30 s timeout; `file://` rejected) and decodes them with ImageIO
 - Shared by the API and the chat window

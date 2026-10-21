@@ -310,17 +310,26 @@ actor OnDeviceModelManager {
         GenerationOptions(temperature: temperature, maximumResponseTokens: maxTokens)
     }
 
-    /// Generate a response for the given messages with conversation context
+    /// Generate a response for the given messages; structured output comes back as JSON
     func generateResponse(
         for messages: [ChatMessage], model appleModel: AppleModel = .onDevice,
-        temperature: Double? = nil, maxTokens: Int? = nil
+        temperature: Double? = nil, maxTokens: Int? = nil, output: StructuredOutput? = nil
     ) async throws -> String {
         let (session, prompt) = try await prepareSession(for: messages, model: appleModel)
         let options = makeOptions(temperature: temperature, maxTokens: maxTokens)
 
         do {
-            let response = try await session.respond(to: prompt, options: options)
-            return response.content
+            switch output {
+            case .guided(let schema):
+                let response = try await session.respond(to: prompt, schema: schema, options: options)
+                return response.content.jsonString
+            case .tagList(let shape):
+                let response = try await session.respond(to: prompt, options: options)
+                return try shape.json(from: response.content)
+            case nil:
+                let response = try await session.respond(to: prompt, options: options)
+                return response.content
+            }
         } catch {
             throw GenerationFailure(error)
         }

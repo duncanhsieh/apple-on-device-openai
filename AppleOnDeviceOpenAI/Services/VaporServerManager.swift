@@ -152,8 +152,17 @@ class VaporServerManager: ObservableObject {
 
             let appleModel = AppleModel(requested: chatRequest.model)
 
+            // Reject an unusable response_format up front, before any streaming starts
+            let output: StructuredOutput?
+            do {
+                output = try chatRequest.responseFormat?.structuredOutput(for: appleModel)
+            } catch {
+                let failure = GenerationFailure(error)
+                return try Self.jsonResponse(failure.errorResponse, status: failure.status)
+            }
+
             if chatRequest.stream == true {
-                return Self.makeStreamingResponse(chatRequest, model: appleModel)
+                return Self.makeStreamingResponse(chatRequest, model: appleModel, output: output)
             }
 
             do {
@@ -161,7 +170,8 @@ class VaporServerManager: ObservableObject {
                     for: chatRequest.messages,
                     model: appleModel,
                     temperature: chatRequest.temperature,
-                    maxTokens: chatRequest.responseTokenLimit
+                    maxTokens: chatRequest.responseTokenLimit,
+                    output: output
                 )
 
                 let chatResponse = ChatCompletionResponse(
@@ -205,7 +215,8 @@ class VaporServerManager: ObservableObject {
 
     // Helper function to handle streaming responses
     private nonisolated static func makeStreamingResponse(
-        _ chatRequest: ChatCompletionRequest, model appleModel: AppleModel
+        _ chatRequest: ChatCompletionRequest, model appleModel: AppleModel,
+        output: StructuredOutput?
     ) -> Response {
         let response = Response()
         response.headers.replaceOrAdd(name: .contentType, value: "text/event-stream")
@@ -242,6 +253,34 @@ class VaporServerManager: ObservableObject {
                 // First chunk carries the role
                 try await writer.write(
                     .buffer(Self.sseEvent(chunk(ChatCompletionDelta(role: "assistant", content: "")))))
+
+                if let output {
+                    // Partial structured output isn't valid JSON, so send the finished object once
+                    let json: String
+                    switch output {
+                    case .guided(let schema):
+                        var finalContent: GeneratedContent?
+                        for try await snapshot in session.streamResponse(
+                            to: prompt, schema: schema, options: options)
+                        {
+                            finalContent = snapshot.content
+                        }
+                        json = finalContent?.jsonString ?? "{}"
+                    case .tagList(let shape):
+                        var text = ""
+                        for try await snapshot in session.streamResponse(to: prompt, options: options) {
+                            text = snapshot.content
+                        }
+                        json = try shape.json(from: text)
+                    }
+                    try await writer.write(
+                        .buffer(Self.sseEvent(chunk(ChatCompletionDelta(content: json)))))
+                    try await writer.write(
+                        .buffer(Self.sseEvent(chunk(ChatCompletionDelta(), finishReason: "stop"))))
+                    try? await writer.write(.buffer(ByteBuffer(string: "data: [DONE]\n\n")))
+                    try? await writer.write(.end)
+                    return
+                }
 
                 // Each snapshot holds the full text generated so far; send only the new part
                 var previousContent = ""

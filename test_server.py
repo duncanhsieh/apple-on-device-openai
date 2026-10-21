@@ -205,6 +205,39 @@ def test_image_input():
         print(f"❌ Image input error: {e}")
         return False
 
+def test_structured_output():
+    """Test response_format json_schema on the general and content tagging models"""
+    print("\n🧩 Testing structured output (response_format json_schema)...")
+    client = OpenAI(base_url=API_BASE_URL, api_key="dummy-key")
+    text = "Apple unveiled new MacBook Pro models with M5 chips. Tim Cook said they ship next week."
+    topics = {"type": "object", "required": ["topics"], "properties": {
+        "topics": {"type": "array", "items": {"type": "string"}, "maxItems": 3}}}
+    review = {"type": "object", "required": ["sentiment", "rating"], "properties": {
+        "sentiment": {"type": "string", "enum": ["positive", "negative", "neutral"]},
+        "rating": {"type": "integer", "minimum": 1, "maximum": 5}}}
+    ok = True
+    for model, schema, check in [
+        ("apple-on-device-content-tagging", topics, lambda r: len(r["topics"]) <= 3),
+        ("apple-on-device", review, lambda r: r["sentiment"] in review["properties"]["sentiment"]["enum"]
+            and 1 <= r["rating"] <= 5),
+    ]:
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[{"role": "user", "content": text}],
+                response_format={"type": "json_schema", "json_schema": {"name": "Result", "schema": schema}},
+            )
+            result = json.loads(response.choices[0].message.content)
+            if check(result):
+                print(f"✅ {model}: {json.dumps(result, ensure_ascii=False)}")
+            else:
+                print(f"❌ {model}: output doesn't match the schema: {result}")
+                ok = False
+        except Exception as e:
+            print(f"❌ {model}: {e}")
+            ok = False
+    return ok
+
 def main():
     """Main test function"""
     print("🚀 Starting Apple On-Device OpenAI Compatible Server Tests")
@@ -230,6 +263,7 @@ def main():
         test_chat_completion_openai_sdk()
         test_chinese_conversation()
         test_image_input()
+        test_structured_output()
         
         print("\n" + "=" * 60)
         print("🌊 Testing streaming functionality")
