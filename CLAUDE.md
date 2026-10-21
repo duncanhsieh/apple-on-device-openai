@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a macOS SwiftUI application that creates an OpenAI-compatible API server using Apple's on-device Foundation Models. The server exposes local Apple Intelligence models through familiar OpenAI API endpoints, enabling developers to use Apple's on-device AI with existing OpenAI-compatible tools.
 
-**Important**: This is a GUI application (not a CLI tool) to avoid Apple's rate limiting policies for Foundation Models. Command-line tools are rate-limited, but foreground GUI apps are not. It runs as a menu bar app (`MenuBarExtra` + `INFOPLIST_KEY_LSUIElement = YES`), so it has no Dock icon or main window.
+**Important**: This is a GUI application (not a CLI tool) to avoid Apple's rate limiting policies for Foundation Models. Command-line tools are rate-limited, but foreground GUI apps are not. It runs as a menu bar app (`MenuBarExtra` + `INFOPLIST_KEY_LSUIElement = YES`), so by default it has no Dock icon or main window. The "Show in Dock" setting (`showInDock` in UserDefaults) switches the activation policy to `.regular` at runtime.
 
 ## Requirements
 
@@ -52,6 +52,13 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 **AppleOnDeviceOpenAIApp** (`AppleOnDeviceOpenAIApp.swift`)
 - Owns the single `ServerViewModel` and shows `ContentView` in a `MenuBarExtra` (`.window` style)
 - Menu bar icon switches to the filled symbol while the server is running
+- `applyDockVisibility(_:)` toggles `.regular` / `.accessory`; `AppDelegate` applies the saved setting at launch
+- `Window` scene (`chatWindowID`) hosts `ChatView`; it opens at launch only in Dock mode
+
+**ChatView** (`ChatView.swift`)
+- `ChatViewModel` keeps one `LanguageModelSession` per conversation (created via `AppleModel.makeSession`) and streams replies
+- Talks to the model directly, not through the HTTP server
+- Switching models or "New Chat" resets the session
 
 **AppleModel** (`Services/OnDeviceModelManager.swift`)
 - Enum of models selectable through the OpenAI `model` field: `apple-on-device`, `apple-on-device-content-tagging`, `apple-private-cloud-compute`
@@ -75,7 +82,7 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 
 **ContentView** (`ContentView.swift`)
 - Menu bar panel UI with server configuration and status; receives the shared `ServerViewModel`
-- Lists every model with its availability, plus a Quit button
+- Lists every model with its availability, plus "Show in Dock" toggle, "Open Chat" and Quit buttons
 - Displays server URLs, endpoints, and integration examples
 - Provides network interface picker for bind address (127.0.0.1, 0.0.0.0, or specific IPs)
 - Includes refresh button to rescan network interfaces

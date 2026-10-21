@@ -17,7 +17,9 @@ Use it in any OpenAI compatible app:
 - **Streaming Support**: Real-time streaming responses compatible with OpenAI's streaming format
 - **On-Device Processing**: Uses Apple's Foundation Models for completely local AI processing
 - **Model Availability Check**: Automatically checks Apple Intelligence availability on startup
-- **Menu Bar App**: Lives in the menu bar (no Dock icon); the icon fills in while the server is running
+- **Menu Bar App**: Lives in the menu bar (no Dock icon by default); the icon fills in while the server is running
+- **Optional Dock Mode**: Turn on "Show in Dock" to run it as a regular app with a Dock icon
+- **Chat Window**: Built-in chat for trying the models directly, with streaming and multi-turn context
 - **Model Selection**: Choose the on-device model, its content-tagging mode, or Private Cloud Compute (macOS 27+) via the `model` field
 - **🚧 Tool Using (WIP)**: Function calling capabilities for extended AI functionality
 
@@ -83,6 +85,13 @@ This project is implemented as a GUI application rather than a command-line tool
 3. Click "Start Server" — the menu bar icon fills in while the server is running
 4. Server will be available at the configured address
 5. Use the "Quit" button (⌘Q) at the bottom of the panel to exit the app
+
+### Dock Mode and Chat Window
+
+- **Show in Dock**: The toggle at the bottom of the panel switches the app between menu-bar-only and a regular Dock app. It takes effect immediately and is remembered; in Dock mode the chat window opens at launch.
+- **Open Chat**: Opens a chat window for talking to the selected model. Pick the model from the toolbar (switching models starts a new chat), press Return to send, and use the stop button to cancel a response. Messages go straight to the model, so the API server doesn't need to be running.
+
+Keeping the chat window in front also keeps the app in the foreground, which avoids the background rate limits described above.
 
 ### Available Endpoints
 

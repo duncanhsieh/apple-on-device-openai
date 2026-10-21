@@ -223,6 +223,8 @@ class ServerViewModel: ObservableObject {
 // MARK: - Main View
 struct ContentView: View {
     @ObservedObject var viewModel: ServerViewModel
+    @AppStorage(showInDockKey) private var showInDock = false
+    @Environment(\.openWindow) private var openWindow
     @State private var isStarting = false
     @State private var isStopping = false
 
@@ -527,7 +529,20 @@ struct ContentView: View {
                 }
 
                 HStack {
+                    Toggle("Show in Dock", isOn: $showInDock)
+                        .toggleStyle(.switch)
+                        .controlSize(.small)
+                        .onChange(of: showInDock) { _, newValue in
+                            applyDockVisibility(newValue)
+                        }
+
                     Spacer()
+
+                    Button("Open Chat") {
+                        openWindow(id: chatWindowID)
+                        NSApp.activate()
+                    }
+
                     Button("Quit") {
                         NSApplication.shared.terminate(nil)
                     }
