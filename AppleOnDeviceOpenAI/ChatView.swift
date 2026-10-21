@@ -5,7 +5,9 @@
 
 import Combine
 import FoundationModels
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 let chatWindowID = "chat"
 
@@ -19,7 +21,27 @@ struct ChatEntry: Identifiable {
     let id = UUID()
     let role: Role
     var text: String
+    var images: [ChatImage] = []
     var isError = false
+}
+
+struct ChatImage: Identifiable {
+    let id = UUID()
+    let cgImage: CGImage
+}
+
+enum ChatImageError: LocalizedError {
+    case unreadable
+    case invalidURL
+    case tooLarge
+
+    var errorDescription: String? {
+        switch self {
+        case .unreadable: return "The file isn't an image that can be read"
+        case .invalidURL: return "Enter an http(s) image URL"
+        case .tooLarge: return "Images must be 20 MB or smaller"
+        }
+    }
 }
 
 // MARK: - ViewModel
@@ -29,22 +51,40 @@ class ChatViewModel: ObservableObject {
     @Published var entries: [ChatEntry] = []
     @Published var input: String = ""
     @Published var isResponding: Bool = false
+    @Published var pendingImages: [ChatImage] = []
+    @Published var isLoadingImage: Bool = false
+    @Published var attachmentError: String?
     @Published var selectedModel: AppleModel = .onDevice {
         didSet {
             if oldValue != selectedModel { reset() }
         }
     }
 
+    private static let maxImageBytes = 20 * 1024 * 1024
+
+    var supportsImages: Bool {
+        selectedModel.supportsImages
+    }
+
     // One session per conversation keeps multi-turn context
     private var session: LanguageModelSession?
     private var responseTask: Task<Void, Never>?
 
+    var canSend: Bool {
+        !isResponding && !isLoadingImage
+            && (!input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !pendingImages.isEmpty)
+    }
+
     func send() {
         let prompt = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !prompt.isEmpty, !isResponding else { return }
+        guard canSend else { return }
 
+        let images = pendingImages
         input = ""
-        entries.append(ChatEntry(role: .user, text: prompt))
+        pendingImages = []
+        attachmentError = nil
+        entries.append(ChatEntry(role: .user, text: prompt, images: images))
 
         let (available, reason) = selectedModel.availability()
         guard available else {
@@ -65,7 +105,7 @@ class ChatViewModel: ObservableObject {
 
         responseTask = Task {
             do {
-                for try await snapshot in session.streamResponse(to: prompt) {
+                for try await snapshot in stream(session, prompt: prompt, images: images) {
                     update(reply.id) { $0.text = snapshot.content }
                 }
             } catch is CancellationError {
@@ -87,8 +127,87 @@ class ChatViewModel: ObservableObject {
     func reset() {
         stop()
         entries = []
+        pendingImages = []
+        attachmentError = nil
         session = nil
         isResponding = false
+    }
+
+    // MARK: Images
+
+    func addImage(fromFile url: URL) {
+        // Files from the open panel or a drop are security-scoped in the sandbox
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+
+        do {
+            let data = try Data(contentsOf: url)
+            try appendImage(data)
+        } catch {
+            attachmentError = error.localizedDescription
+        }
+    }
+
+    func addImage(fromURLString string: String) {
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), ["http", "https"].contains(url.scheme?.lowercased())
+        else {
+            attachmentError = ChatImageError.invalidURL.localizedDescription
+            return
+        }
+        addImage(fromRemote: url)
+    }
+
+    func addImage(fromRemote url: URL) {
+        isLoadingImage = true
+        attachmentError = nil
+        Task {
+            do {
+                let (data, _) = try await URLSession.shared.data(from: url)
+                try appendImage(data)
+            } catch {
+                attachmentError = "Couldn't load image: \(error.localizedDescription)"
+            }
+            isLoadingImage = false
+        }
+    }
+
+    /// Handle URLs dropped onto the chat: local image files or web image links
+    func addDroppedImages(_ urls: [URL]) {
+        for url in urls {
+            if url.isFileURL {
+                addImage(fromFile: url)
+            } else {
+                addImage(fromRemote: url)
+            }
+        }
+    }
+
+    func removePendingImage(_ id: UUID) {
+        pendingImages.removeAll { $0.id == id }
+    }
+
+    private func appendImage(_ data: Data) throws {
+        guard data.count <= Self.maxImageBytes else { throw ChatImageError.tooLarge }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+            let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else { throw ChatImageError.unreadable }
+        pendingImages.append(ChatImage(cgImage: cgImage))
+        attachmentError = nil
+    }
+
+    private func stream(_ session: LanguageModelSession, prompt: String, images: [ChatImage])
+        -> LanguageModelSession.ResponseStream<String>
+    {
+        if #available(macOS 27.0, *), !images.isEmpty {
+            return session.streamResponse {
+                prompt
+                for image in images {
+                    Attachment(image.cgImage)
+                }
+            }
+        }
+        return session.streamResponse(to: prompt)
     }
 
     private func update(_ id: UUID, _ change: (inout ChatEntry) -> Void) {
@@ -102,6 +221,9 @@ class ChatViewModel: ObservableObject {
 struct ChatView: View {
     @StateObject private var chat = ChatViewModel()
     @FocusState private var isInputFocused: Bool
+    @State private var isImporterPresented = false
+    @State private var isURLPromptPresented = false
+    @State private var imageURLInput = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -135,7 +257,32 @@ struct ChatView: View {
 
             Divider()
 
+            if !chat.pendingImages.isEmpty || chat.isLoadingImage || chat.attachmentError != nil {
+                AttachmentTray(chat: chat)
+            }
+
             HStack(alignment: .bottom, spacing: 8) {
+                Menu {
+                    Button("Choose Image…", systemImage: "photo") {
+                        isImporterPresented = true
+                    }
+                    Button("Image from URL…", systemImage: "link") {
+                        imageURLInput = ""
+                        isURLPromptPresented = true
+                    }
+                } label: {
+                    Image(systemName: "paperclip")
+                        .font(.title3)
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .disabled(!chat.supportsImages || chat.isResponding)
+                .help(
+                    chat.supportsImages
+                        ? "Attach an image (or drop one onto the chat)"
+                        : chat.selectedModel.imagesUnsupportedReason)
+
                 TextField("Message", text: $chat.input, axis: .vertical)
                     .textFieldStyle(.plain)
                     .lineLimit(1...6)
@@ -159,7 +306,7 @@ struct ChatView: View {
                             .font(.title2)
                     }
                     .buttonStyle(.borderless)
-                    .disabled(chat.input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!chat.canSend)
                     .help("Send (Return)")
                 }
             }
@@ -186,10 +333,89 @@ struct ChatView: View {
         }
         .navigationTitle("Chat")
         .onAppear { isInputFocused = true }
+        .fileImporter(
+            isPresented: $isImporterPresented,
+            allowedContentTypes: [.image],
+            allowsMultipleSelection: true
+        ) { result in
+            switch result {
+            case .success(let urls):
+                urls.forEach(chat.addImage(fromFile:))
+            case .failure(let error):
+                chat.attachmentError = error.localizedDescription
+            }
+        }
+        .alert("Image from URL", isPresented: $isURLPromptPresented) {
+            TextField("https://example.com/image.jpg", text: $imageURLInput)
+            Button("Add") {
+                chat.addImage(fromURLString: imageURLInput)
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+        .dropDestination(for: URL.self) { urls, _ in
+            guard chat.supportsImages, !chat.isResponding else { return false }
+            chat.addDroppedImages(urls)
+            return true
+        }
     }
 }
 
 // MARK: - Helper Views
+struct AttachmentTray: View {
+    @ObservedObject var chat: ChatViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(chat.pendingImages) { image in
+                        ZStack(alignment: .topTrailing) {
+                            ChatThumbnail(image: image, size: 64)
+
+                            Button {
+                                chat.removePendingImage(image.id)
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .foregroundStyle(.white, .black.opacity(0.6))
+                            }
+                            .buttonStyle(.borderless)
+                            .padding(2)
+                            .help("Remove image")
+                        }
+                    }
+
+                    if chat.isLoadingImage {
+                        ProgressView()
+                            .controlSize(.small)
+                            .frame(width: 64, height: 64)
+                    }
+                }
+            }
+
+            if let error = chat.attachmentError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+    }
+}
+
+struct ChatThumbnail: View {
+    let image: ChatImage
+    let size: CGFloat
+
+    var body: some View {
+        Image(decorative: image.cgImage, scale: 1)
+            .resizable()
+            .scaledToFill()
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 struct ChatBubble: View {
     let entry: ChatEntry
 
@@ -197,23 +423,39 @@ struct ChatBubble: View {
         HStack {
             if entry.role == .user { Spacer(minLength: 60) }
 
-            Group {
-                if entry.text.isEmpty {
-                    ProgressView()
-                        .controlSize(.small)
-                } else {
-                    Text(entry.text)
-                        .textSelection(.enabled)
+            VStack(alignment: entry.role == .user ? .trailing : .leading, spacing: 6) {
+                if !entry.images.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(entry.images) { image in
+                            ChatThumbnail(image: image, size: 120)
+                        }
+                    }
+                }
+
+                if !entry.text.isEmpty || entry.images.isEmpty {
+                    bubble
                 }
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(background)
-            .foregroundColor(entry.role == .user ? .white : .primary)
-            .clipShape(RoundedRectangle(cornerRadius: 12))
 
             if entry.role == .assistant { Spacer(minLength: 60) }
         }
+    }
+
+    private var bubble: some View {
+        Group {
+            if entry.text.isEmpty {
+                ProgressView()
+                    .controlSize(.small)
+            } else {
+                Text(entry.text)
+                    .textSelection(.enabled)
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(background)
+        .foregroundColor(entry.role == .user ? .white : .primary)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
     }
 
     private var background: Color {

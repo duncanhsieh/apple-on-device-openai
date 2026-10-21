@@ -46,6 +46,24 @@ nonisolated enum AppleModel: String, CaseIterable, Sendable {
         }
     }
 
+    /// Image input needs macOS 27 and a model with the vision capability
+    var supportsImages: Bool {
+        guard #available(macOS 27.0, *) else { return false }
+        switch self {
+        case .onDevice:
+            return SystemLanguageModel.default.capabilities.contains(.vision)
+        case .onDeviceContentTagging:
+            return SystemLanguageModel(useCase: .contentTagging).capabilities.contains(.vision)
+        case .privateCloudCompute:
+            return PrivateCloudComputeLanguageModel().capabilities.contains(.vision)
+        }
+    }
+
+    var imagesUnsupportedReason: String {
+        guard #available(macOS 27.0, *) else { return "Image input requires macOS 27 or later" }
+        return "\(displayName) doesn't support image input"
+    }
+
     func makeSession(transcript: Transcript) -> LanguageModelSession {
         switch self {
         case .onDevice:

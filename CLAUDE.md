@@ -59,6 +59,7 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 - `ChatViewModel` keeps one `LanguageModelSession` per conversation (created via `AppleModel.makeSession`) and streams replies
 - Talks to the model directly, not through the HTTP server
 - Switching models or "New Chat" resets the session
+- Image attachments (file picker, URL, drag and drop) are sent as `Attachment(cgImage)` in a `PromptBuilder` prompt; gated by `AppleModel.supportsImages` (macOS 27 + `.vision` capability)
 
 **AppleModel** (`Services/OnDeviceModelManager.swift`)
 - Enum of models selectable through the OpenAI `model` field: `apple-on-device`, `apple-on-device-content-tagging`, `apple-private-cloud-compute`

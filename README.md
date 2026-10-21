@@ -19,7 +19,7 @@ Use it in any OpenAI compatible app:
 - **Model Availability Check**: Automatically checks Apple Intelligence availability on startup
 - **Menu Bar App**: Lives in the menu bar (no Dock icon by default); the icon fills in while the server is running
 - **Optional Dock Mode**: Turn on "Show in Dock" to run it as a regular app with a Dock icon
-- **Chat Window**: Built-in chat for trying the models directly, with streaming and multi-turn context
+- **Chat Window**: Built-in chat for trying the models directly, with streaming and multi-turn context; on macOS 27 you can also attach images
 - **Model Selection**: Choose the on-device model, its content-tagging mode, or Private Cloud Compute (macOS 27+) via the `model` field
 - **🚧 Tool Using (WIP)**: Function calling capabilities for extended AI functionality
 
@@ -90,6 +90,7 @@ This project is implemented as a GUI application rather than a command-line tool
 
 - **Show in Dock**: The toggle at the bottom of the panel switches the app between menu-bar-only and a regular Dock app. It takes effect immediately and is remembered; in Dock mode the chat window opens at launch.
 - **Open Chat**: Opens a chat window for talking to the selected model. Pick the model from the toolbar (switching models starts a new chat), press Return to send, and use the stop button to cancel a response. Messages go straight to the model, so the API server doesn't need to be running.
+- **Images (macOS 27+)**: Use the paperclip to choose image files or paste an image URL, or drop image files / links onto the chat. Attachments are limited to 20 MB each. The paperclip is disabled on macOS 26 and for models without the vision capability.
 
 Keeping the chat window in front also keeps the app in the foreground, which avoids the background rate limits described above.
 
