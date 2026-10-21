@@ -66,25 +66,12 @@ open AppleOnDeviceOpenAI.xcodeproj
 
 3. Build and run the project in Xcode
 
-Or build from the command line without an Apple Developer account (ad-hoc signed, output in `build/`). This drops the Private Cloud Compute entitlement, so PCC shows as unavailable:
+Or build from the command line (ad-hoc signed, output in `build/`):
 ```bash
 xcodebuild -project AppleOnDeviceOpenAI.xcodeproj -scheme AppleOnDeviceOpenAI \
   -configuration Debug -derivedDataPath build \
-  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" CODE_SIGN_ENTITLEMENTS="" build
+  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build
 open build/Build/Products/Debug/AppleOnDeviceOpenAI.app
-```
-
-### Signing for Private Cloud Compute
-
-The `apple-private-cloud-compute` model needs the app signed by your Apple Developer team with the `com.apple.developer.private-cloud-compute` entitlement (already in `AppleOnDeviceOpenAI/AppleOnDeviceOpenAI.entitlements`):
-
-1. Add your Apple ID in Xcode > Settings > Accounts.
-2. In the target's Signing & Capabilities, pick your team (or set `DEVELOPMENT_TEAM`). Change the bundle ID if `com.duncanhsieh.AppleOnDeviceOpenAI` isn't yours.
-3. Build with automatic signing; from the command line:
-```bash
-xcodebuild -project AppleOnDeviceOpenAI.xcodeproj -scheme AppleOnDeviceOpenAI \
-  -configuration Debug -derivedDataPath build -allowProvisioningUpdates \
-  DEVELOPMENT_TEAM=<your team ID> build
 ```
 
 ## Why a GUI App Instead of Command Line?

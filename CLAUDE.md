@@ -28,15 +28,13 @@ open AppleOnDeviceOpenAI.xcodeproj
 ```bash
 xcodebuild -project AppleOnDeviceOpenAI.xcodeproj -scheme AppleOnDeviceOpenAI \
   -configuration Debug -derivedDataPath build \
-  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" CODE_SIGN_ENTITLEMENTS="" build
+  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build
 open build/Build/Products/Debug/AppleOnDeviceOpenAI.app
 ```
 
-`CODE_SIGN_ENTITLEMENTS=""` drops `AppleOnDeviceOpenAI.entitlements` (the restricted PCC entitlement); Xcode refuses ad-hoc builds that include it. Sandbox/network entitlements come from `ENABLE_*` build settings and stay. For a PCC-capable build, sign with a development team: add `-allowProvisioningUpdates DEVELOPMENT_TEAM=<team ID>` and leave out the ad-hoc settings.
-
 The app is sandboxed, so `kill`/`pkill` may not stop it; quit it with:
 ```bash
-osascript -e 'tell application id "com.duncanhsieh.AppleOnDeviceOpenAI" to quit'
+osascript -e 'tell application id "com.littlecarved.AppleOnDeviceOpenAI" to quit'
 ```
 
 ### Testing the server:
