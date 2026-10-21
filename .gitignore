@@ -76,3 +76,13 @@ logs/
 
 # Instruments
 *.trace 
+
+# Xcode build output (xcodebuild -derivedDataPath build)
+build/
+DerivedData/
+*.xcuserstate
+
+# Python
+__pycache__/
+*.pyc
+.venv/
