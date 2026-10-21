@@ -185,6 +185,7 @@ nonisolated struct ServerStatus: Content, Sendable {
     let supportedLanguages: [String]
     let serverVersion: String
     let appleIntelligenceCompatible: Bool
+    let models: [ModelStatus]
 
     enum CodingKeys: String, CodingKey {
         case modelAvailable = "model_available"
@@ -192,7 +193,14 @@ nonisolated struct ServerStatus: Content, Sendable {
         case supportedLanguages = "supported_languages"
         case serverVersion = "server_version"
         case appleIntelligenceCompatible = "apple_intelligence_compatible"
+        case models
     }
+}
+
+nonisolated struct ModelStatus: Content, Sendable {
+    let id: String
+    let available: Bool
+    let reason: String?
 }
 
 // MARK: - Error Response

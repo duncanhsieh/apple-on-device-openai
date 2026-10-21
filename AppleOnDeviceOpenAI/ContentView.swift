@@ -42,6 +42,7 @@ class ServerViewModel: ObservableObject {
     @Published var isModelAvailable: Bool = false
     @Published var modelUnavailableReason: String?
     @Published var isCheckingModel: Bool = false
+    @Published var modelStatuses: [ModelStatus] = []
 
     @Published var availableAddresses: [String] = []
     @Published var selectedAddress: String = "127.0.0.1" {
@@ -49,6 +50,7 @@ class ServerViewModel: ObservableObject {
     }
 
     private let serverManager = VaporServerManager()
+    private var cancellables = Set<AnyCancellable>()
 
     var isRunning: Bool {
         serverManager.isRunning
@@ -97,6 +99,12 @@ class ServerViewModel: ObservableObject {
         self.hostInput = configuration.host
         self.portInput = String(configuration.port)
 
+        // Re-publish server state so the menu bar icon tracks it
+        serverManager.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
         // Check model availability on startup
         Task {
             await checkModelAvailability()
@@ -110,6 +118,10 @@ class ServerViewModel: ObservableObject {
 
         isModelAvailable = result.available
         modelUnavailableReason = result.reason
+        modelStatuses = AppleModel.allCases.map { model in
+            let (available, reason) = model.availability()
+            return ModelStatus(id: model.rawValue, available: available, reason: reason)
+        }
         isCheckingModel = false
     }
 
@@ -210,7 +222,7 @@ class ServerViewModel: ObservableObject {
 
 // MARK: - Main View
 struct ContentView: View {
-    @StateObject private var viewModel = ServerViewModel()
+    @ObservedObject var viewModel: ServerViewModel
     @State private var isStarting = false
     @State private var isStopping = false
 
@@ -396,33 +408,22 @@ struct ContentView: View {
 
                             Divider()
 
-                            // Model Name
-                            HStack {
+                            // Model Names
+                            VStack(alignment: .leading, spacing: 8) {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("Model Name")
+                                    Text("Models")
                                         .font(.subheadline)
                                         .fontWeight(.medium)
-                                    Text("Use this in your API requests")
+                                    Text("Pass one of these as `model` in your API requests")
                                         .font(.caption)
                                         .foregroundColor(.secondary)
                                 }
 
-                                Spacer()
-
-                                HStack {
-                                    Text(viewModel.modelName)
-                                        .font(.system(.body, design: .monospaced))
-                                        .textSelection(.enabled)
-
-                                    Button("Copy") {
-                                        viewModel.copyToClipboard(viewModel.modelName)
+                                ForEach(viewModel.modelStatuses, id: \.id) { status in
+                                    ModelRow(status: status) {
+                                        viewModel.copyToClipboard(status.id)
                                     }
-                                    .buttonStyle(.borderless)
                                 }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
-                                .background(Color.gray.opacity(0.1))
-                                .clipShape(RoundedRectangle(cornerRadius: 8))
                             }
                         }
                     }
@@ -524,14 +525,58 @@ struct ContentView: View {
                         }
                     }
                 }
+
+                HStack {
+                    Spacer()
+                    Button("Quit") {
+                        NSApplication.shared.terminate(nil)
+                    }
+                    .keyboardShortcut("q")
+                }
             }
             .padding()
         }
-        .frame(maxWidth: 600)
+        .frame(width: 520, height: 640)
     }
 }
 
 // MARK: - Helper Views
+struct ModelRow: View {
+    let status: ModelStatus
+    let onCopy: () -> Void
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Circle()
+                .fill(status.available ? Color.green : Color.orange)
+                .frame(width: 8, height: 8)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(status.id)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                if let reason = status.reason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+            }
+
+            Spacer()
+
+            Button("Copy") {
+                onCopy()
+            }
+            .buttonStyle(.borderless)
+            .disabled(!status.available)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(Color.gray.opacity(0.1))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 struct APIEndpointRow: View {
     let title: String
     let subtitle: String
@@ -636,5 +681,5 @@ struct EndpointRow: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(viewModel: ServerViewModel())
 }

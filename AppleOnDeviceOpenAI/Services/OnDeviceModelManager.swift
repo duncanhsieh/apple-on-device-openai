@@ -2,20 +2,70 @@ import Foundation
 import FoundationModels
 import Vapor
 
-// MARK: - Apple Intelligence Manager
+// MARK: - Model Selection
 
-/// Manager for Apple Intelligence on-device language model
-actor OnDeviceModelManager {
-    private let model: SystemLanguageModel
+/// Models selectable through the OpenAI `model` field
+nonisolated enum AppleModel: String, CaseIterable, Sendable {
+    case onDevice = "apple-on-device"
+    case onDeviceContentTagging = "apple-on-device-content-tagging"
+    case privateCloudCompute = "apple-private-cloud-compute"
 
-    init() {
-        self.model = SystemLanguageModel.default
+    /// Unknown model ids (e.g. "gpt-4o" from existing clients) fall back to the on-device model
+    init(requested: String?) {
+        self = requested.flatMap(AppleModel.init(rawValue:)) ?? .onDevice
     }
 
-    /// Check if the model is available
-    func isModelAvailable() -> (available: Bool, reason: String?) {
-        let availability = model.availability
+    var displayName: String {
+        switch self {
+        case .onDevice: return "On-Device"
+        case .onDeviceContentTagging: return "On-Device (Content Tagging)"
+        case .privateCloudCompute: return "Private Cloud Compute"
+        }
+    }
 
+    func availability() -> (available: Bool, reason: String?) {
+        switch self {
+        case .onDevice:
+            return Self.describe(SystemLanguageModel.default.availability)
+        case .onDeviceContentTagging:
+            return Self.describe(SystemLanguageModel(useCase: .contentTagging).availability)
+        case .privateCloudCompute:
+            guard #available(macOS 27.0, *) else {
+                return (false, "Private Cloud Compute requires macOS 27 or later")
+            }
+            switch PrivateCloudComputeLanguageModel().availability {
+            case .available:
+                return (true, nil)
+            case .unavailable(.deviceNotEligible):
+                return (false, "Device not eligible for Private Cloud Compute")
+            case .unavailable(.systemNotReady):
+                return (false, "Private Cloud Compute is not ready yet. Please try again later.")
+            @unknown default:
+                return (false, "Unknown Private Cloud Compute availability status")
+            }
+        }
+    }
+
+    func makeSession(transcript: Transcript) -> LanguageModelSession {
+        switch self {
+        case .onDevice:
+            return LanguageModelSession(model: .default, transcript: transcript)
+        case .onDeviceContentTagging:
+            return LanguageModelSession(
+                model: SystemLanguageModel(useCase: .contentTagging), transcript: transcript)
+        case .privateCloudCompute:
+            guard #available(macOS 27.0, *) else {
+                // availability() rejects this case before a session is created
+                return LanguageModelSession(model: .default, transcript: transcript)
+            }
+            return LanguageModelSession(
+                model: PrivateCloudComputeLanguageModel(), transcript: transcript)
+        }
+    }
+
+    private static func describe(_ availability: SystemLanguageModel.Availability) -> (
+        available: Bool, reason: String?
+    ) {
         switch availability {
         case .available:
             return (true, nil)
@@ -43,6 +93,22 @@ actor OnDeviceModelManager {
         @unknown default:
             return (false, "Unknown availability status")
         }
+    }
+}
+
+// MARK: - Apple Intelligence Manager
+
+/// Manager for Apple Intelligence on-device language model
+actor OnDeviceModelManager {
+    private let model: SystemLanguageModel
+
+    init() {
+        self.model = SystemLanguageModel.default
+    }
+
+    /// Check if the on-device model is available
+    func isModelAvailable() -> (available: Bool, reason: String?) {
+        AppleModel.onDevice.availability()
     }
 
     /// Get supported languages
@@ -108,13 +174,14 @@ actor OnDeviceModelManager {
 
     /// Generate a response for the given messages with conversation context
     func generateResponse(
-        for messages: [ChatMessage], temperature: Double? = nil, maxTokens: Int? = nil
+        for messages: [ChatMessage], model appleModel: AppleModel = .onDevice,
+        temperature: Double? = nil, maxTokens: Int? = nil
     ) async throws -> String {
         // Check availability first
-        let (available, reason) = isModelAvailable()
+        let (available, reason) = appleModel.availability()
         guard available else {
             throw Abort(
-                .serviceUnavailable, reason: reason ?? "Apple Intelligence model is not available")
+                .serviceUnavailable, reason: reason ?? "\(appleModel.displayName) is not available")
         }
 
         guard !messages.isEmpty else {
@@ -133,9 +200,7 @@ actor OnDeviceModelManager {
         let transcript = Transcript(entries: transcriptEntries)
 
         // Create new session with the conversation transcript
-        let session = LanguageModelSession(
-            transcript: transcript
-        )
+        let session = appleModel.makeSession(transcript: transcript)
 
         do {
             // Create generation options if temperature is specified
@@ -156,9 +221,29 @@ actor OnDeviceModelManager {
             return content
         } catch {
             throw Abort(
-                .internalServerError,
+                Self.httpStatus(for: error),
                 reason: "Error generating response: \(error.localizedDescription)")
         }
+    }
+
+    /// Map rate limit / quota errors to 429 so OpenAI clients back off and retry
+    nonisolated static func httpStatus(for error: Error) -> HTTPResponseStatus {
+        if let error = error as? LanguageModelSession.GenerationError,
+            case .rateLimited = error
+        {
+            return .tooManyRequests
+        }
+        if #available(macOS 27.0, *) {
+            if let error = error as? LanguageModelError, case .rateLimited = error {
+                return .tooManyRequests
+            }
+            if let error = error as? PrivateCloudComputeLanguageModel.Error,
+                case .quotaLimitReached = error
+            {
+                return .tooManyRequests
+            }
+        }
+        return .internalServerError
     }
 
     /// Generate a response for a single prompt (for backward compatibility)

@@ -18,7 +18,6 @@ class VaporServerManager: ObservableObject {
     private var app: Application?
     private var serverTask: Task<Void, Never>?
 
-    private static let modelName = "apple-on-device"
     private static var loggingBootstrapped = false
 
     func startServer(configuration: ServerConfiguration) async {
@@ -96,12 +95,18 @@ class VaporServerManager: ObservableObject {
             let (available, reason) = await aiManager.isModelAvailable()
             let supportedLanguages = await aiManager.getSupportedLanguages()
 
+            let models = AppleModel.allCases.map { model in
+                let (modelAvailable, modelReason) = model.availability()
+                return ModelStatus(id: model.rawValue, available: modelAvailable, reason: modelReason)
+            }
+
             return ServerStatus(
                 modelAvailable: available,
                 reason: reason ?? "Model is available",
                 supportedLanguages: supportedLanguages,
                 serverVersion: "1.0.0",
-                appleIntelligenceCompatible: true
+                appleIntelligenceCompatible: true,
+                models: models
             )
         }
 
@@ -110,19 +115,17 @@ class VaporServerManager: ObservableObject {
 
         // List models endpoint
         v1.get("models") { req async throws -> ModelsResponse in
-            let (available, _) = await aiManager.isModelAvailable()
-
-            var models: [ModelInfo] = []
-
-            if available {
-                models.append(
+            let created = Int(Date().timeIntervalSince1970)
+            let models = AppleModel.allCases
+                .filter { $0.availability().available }
+                .map { model in
                     ModelInfo(
-                        id: Self.modelName,
+                        id: model.rawValue,
                         object: "model",
-                        created: Int(Date().timeIntervalSince1970),
+                        created: created,
                         ownedBy: "apple-on-device-openai"
-                    ))
-            }
+                    )
+                }
 
             return ModelsResponse(
                 object: "list",
@@ -146,8 +149,10 @@ class VaporServerManager: ObservableObject {
                 }
 
                 // Generate response using the manager
+                let appleModel = AppleModel(requested: chatRequest.model)
                 let response = try await aiManager.generateResponse(
                     for: chatRequest.messages,
+                    model: appleModel,
                     temperature: chatRequest.temperature,
                     maxTokens: chatRequest.maxTokens
                 )
@@ -156,7 +161,7 @@ class VaporServerManager: ObservableObject {
                     id: "chatcmpl-\(UUID().uuidString)",
                     object: "chat.completion",
                     created: Int(Date().timeIntervalSince1970),
-                    model: chatRequest.model ?? Self.modelName,
+                    model: appleModel.rawValue,
                     choices: [
                         ChatCompletionChoice(
                             index: 0,
@@ -202,10 +207,11 @@ class VaporServerManager: ObservableObject {
                 do {
                     // Check availability first
                     print("DEBUG: Checking model availability")
-                    let (available, reason) = await aiManager.isModelAvailable()
+                    let appleModel = AppleModel(requested: chatRequest.model)
+                    let (available, reason) = appleModel.availability()
                     guard available else {
                         let errorData = """
-                            data: {"error": {"message": "\(reason ?? "Model not available")", "type": "unavailable_error"}}
+                            data: {"error": {"message": "\(reason ?? "\(appleModel.displayName) not available")", "type": "unavailable_error"}}
 
                             data: [DONE]
 
@@ -231,10 +237,7 @@ class VaporServerManager: ObservableObject {
 
                     // Create new session with the conversation transcript
                     print("DEBUG: Creating language model session")
-                    let session = LanguageModelSession(
-                        model: SystemLanguageModel.default,
-                        transcript: transcript
-                    )
+                    let session = appleModel.makeSession(transcript: transcript)
 
                     // Create generation options
                     var options = GenerationOptions()
@@ -273,7 +276,7 @@ class VaporServerManager: ObservableObject {
                             id: responseId,
                             object: "chat.completion.chunk",
                             created: created,
-                            model: Self.modelName,
+                            model: appleModel.rawValue,
                             choices: [
                                 ChatCompletionStreamChoice(
                                     index: 0,
@@ -304,7 +307,7 @@ class VaporServerManager: ObservableObject {
                         id: responseId,
                         object: "chat.completion.chunk",
                         created: created,
-                        model: Self.modelName,
+                        model: appleModel.rawValue,
                         choices: [
                             ChatCompletionStreamChoice(
                                 index: 0,
