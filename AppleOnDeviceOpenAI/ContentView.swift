@@ -89,8 +89,6 @@ class ServerViewModel: ObservableObject {
         "\(serverURL)/v1/chat/completions"
     }
 
-    let modelName = "apple-on-device"
-
     init() {
         refreshAddresses()                              // populate the picker
         selectedAddress = configuration.host
@@ -120,7 +118,9 @@ class ServerViewModel: ObservableObject {
         modelUnavailableReason = result.reason
         modelStatuses = AppleModel.allCases.map { model in
             let (available, reason) = model.availability()
-            return ModelStatus(id: model.rawValue, available: available, reason: reason)
+            return ModelStatus(
+                id: model.rawValue, available: available, reason: reason,
+                imageInput: model.supportsImages)
         }
         isCheckingModel = false
     }
@@ -156,13 +156,6 @@ class ServerViewModel: ObservableObject {
         selectedAddress = configuration.host
         hostInput = configuration.host
         portInput = String(configuration.port)
-    }
-
-    func copyToClipboard(_ text: String) {
-        #if os(macOS)
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
-        #endif
     }
 
     /// Refresh the list (e.g. when a new Wi‑Fi network is joined).
@@ -220,478 +213,309 @@ class ServerViewModel: ObservableObject {
     }
 }
 
-// MARK: - Main View
+// MARK: - Menu Bar Panel
+/// Compact, Control Center–style panel: server switch, base URL, models and app commands
 struct ContentView: View {
     @ObservedObject var viewModel: ServerViewModel
-    @AppStorage(showInDockKey) private var showInDock = false
     @Environment(\.openWindow) private var openWindow
-    @State private var isStarting = false
-    @State private var isStopping = false
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.dismiss) private var dismiss
+    @State private var isBusy = false
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 24) {
-                // Header
-                VStack(spacing: 8) {
-                    Image(systemName: "brain.head.profile")
-                        .font(.system(size: 48))
-                        .foregroundStyle(.tint)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .padding(12)
 
-                    Text("Apple On-Device OpenAI API")
-                        .font(.title)
-                        .fontWeight(.semibold)
-
-                    Text("Local Apple Intelligence through OpenAI-compatible endpoints")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                        .multilineTextAlignment(.center)
+            if let issue {
+                Divider()
+                IssueRow(issue: issue) {
+                    Task { await viewModel.checkModelAvailability() }
                 }
+                .padding(12)
+            }
 
-                // Server Status
-                GroupBox("Server Status") {
-                    VStack(spacing: 16) {
-                        HStack {
-                            Circle()
-                                .fill(viewModel.isRunning ? Color.green : Color.red)
-                                .frame(width: 12, height: 12)
-
-                            Text(viewModel.isRunning ? "Running" : "Stopped")
-                                .font(.headline)
-                                .foregroundColor(viewModel.isRunning ? .green : .red)
-
-                            Spacer()
-
-                            // Model name badge
-                            if viewModel.isRunning {
-                                Text(viewModel.modelName)
-                                    .font(.caption)
-                                    .padding(.horizontal, 8)
-                                    .padding(.vertical, 4)
-                                    .background(Color.blue.opacity(0.2))
-                                    .foregroundColor(.blue)
-                                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                            }
-                        }
-
-                        // Model Availability Status
-                        HStack {
-                            Text("Apple Intelligence:")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-
-                            if viewModel.isCheckingModel {
-                                ProgressView()
-                                    .scaleEffect(0.7)
-                                Text("Checking...")
-                                    .font(.subheadline)
-                                    .foregroundColor(.secondary)
-                            } else {
-                                Circle()
-                                    .fill(viewModel.isModelAvailable ? Color.green : Color.orange)
-                                    .frame(width: 8, height: 8)
-
-                                Text(viewModel.isModelAvailable ? "Available" : "Not Available")
-                                    .font(.subheadline)
-                                    .foregroundColor(viewModel.isModelAvailable ? .green : .orange)
-                            }
-
-                            Spacer()
-
-                            if !viewModel.isModelAvailable && !viewModel.isCheckingModel {
-                                Button("Retry") {
-                                    Task {
-                                        await viewModel.checkModelAvailability()
-                                    }
-                                }
-                                .buttonStyle(.borderless)
-                                .font(.caption)
-                            }
-                        }
-
-                        // Model unavailable reason
-                        if !viewModel.isModelAvailable,
-                            let reason = viewModel.modelUnavailableReason
-                        {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Issue:")
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-
-                                Text(reason)
-                                    .font(.caption)
-                                    .foregroundColor(.orange)
-                                    .padding(.vertical, 4)
-                                    .padding(.horizontal, 8)
-                                    .background(Color.orange.opacity(0.1))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                            }
-                        }
-
-                        if let error = viewModel.lastError {
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text("Error:")
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-
-                                Text(error)
-                                    .font(.caption)
-                                    .foregroundColor(.red)
-                                    .padding(.vertical, 4)
-                                    .padding(.horizontal, 8)
-                                    .background(Color.red.opacity(0.1))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
-                            }
-                        }
-
-                        HStack {
-                            if viewModel.isRunning {
-                                Button("Stop Server") {
-                                    Task {
-                                        isStopping = true
-                                        await viewModel.stopServer()
-                                        isStopping = false
-                                    }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.large)
-                                .disabled(isStopping)
-                                .tint(.red)
-                            } else {
-                                Button(
-                                    viewModel.isModelAvailable
-                                        ? "Start Server" : "Model Not Available"
-                                ) {
-                                    Task {
-                                        isStarting = true
-                                        await viewModel.startServer()
-                                        isStarting = false
-                                    }
-                                }
-                                .buttonStyle(.borderedProminent)
-                                .controlSize(.large)
-                                .disabled(
-                                    isStarting || !viewModel.isModelAvailable
-                                        || viewModel.isCheckingModel
-                                )
-                                .tint(viewModel.isModelAvailable ? .green : .gray)
-                            }
-
-                            if isStarting || isStopping {
-                                ProgressView()
-                                    .scaleEffect(0.8)
-                            }
-                        }
+            if viewModel.isRunning {
+                Divider()
+                VStack(alignment: .leading, spacing: 4) {
+                    SectionTitle("Base URL")
+                    HStack {
+                        Text(viewModel.openaiBaseURL)
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Spacer()
+                        CopyButton(text: viewModel.openaiBaseURL)
                     }
                 }
+                .padding(12)
+            }
 
-                // OpenAI API Integration - Only show when running
-                if viewModel.isRunning {
-                    GroupBox("OpenAI API Integration") {
-                        VStack(spacing: 16) {
-                            // Base URL for OpenAI clients
-                            APIEndpointRow(
-                                title: "Base URL",
-                                subtitle: "For OpenAI Python/JavaScript clients",
-                                url: viewModel.openaiBaseURL,
-                                onCopy: { viewModel.copyToClipboard(viewModel.openaiBaseURL) }
-                            )
-
-                            Divider()
-
-                            // Chat Completions Endpoint
-                            APIEndpointRow(
-                                title: "Chat Completions",
-                                subtitle: "Direct API endpoint",
-                                url: viewModel.chatCompletionsEndpoint,
-                                onCopy: {
-                                    viewModel.copyToClipboard(viewModel.chatCompletionsEndpoint)
-                                }
-                            )
-
-                            Divider()
-
-                            // Model Names
-                            VStack(alignment: .leading, spacing: 8) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Models")
-                                        .font(.subheadline)
-                                        .fontWeight(.medium)
-                                    Text("Pass one of these as `model` in your API requests")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-
-                                ForEach(viewModel.modelStatuses, id: \.id) { status in
-                                    ModelRow(status: status) {
-                                        viewModel.copyToClipboard(status.id)
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Quick Start Examples
-                    GroupBox("Quick Start") {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("Python Example:")
-                                .font(.subheadline)
-                                .fontWeight(.medium)
-
-                            let pythonCode = """
-                                from openai import OpenAI
-
-                                client = OpenAI(
-                                    base_url="\(viewModel.openaiBaseURL)",
-                                    api_key="not-needed"
-                                )
-
-                                response = client.chat.completions.create(
-                                    model="\(viewModel.modelName)",
-                                    messages=[{"role": "user", "content": "Hello!"}]
-                                )
-                                """
-
-                            CodeBlock(
-                                code: pythonCode,
-                                onCopy: {
-                                    viewModel.copyToClipboard(pythonCode)
-                                })
-                        }
-                    }
-                }
-
-                // Server Configuration
-                GroupBox("Server Configuration") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Picker("Bind Address", selection: $viewModel.selectedAddress) {
-                                ForEach(viewModel.availableAddresses, id: \.self) { addr in
-                                    Text(addr == "0.0.0.0" ? "All interfaces (0.0.0.0)" : addr).tag(addr)
-                                }
-                            }
-                            .pickerStyle(.menu)
-                            .disabled(viewModel.isRunning)
-
-                            Button {
-                                viewModel.refreshAddresses()
-                            } label: {
-                                Image(systemName: "arrow.clockwise")
-                                    .imageScale(.medium)      // optional: size the symbol
-                            }
-                            .help("Rescan network interfaces")
-                            .disabled(viewModel.isRunning)
-                        }
-
-                        // LAN‑visibility warning
-                        if viewModel.needsLANWarning {
-                            HStack(spacing: 6) {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundColor(.red)
-                                Text("Binding to this address makes the server reachable by other devices\n" +
-                                     "on your local network. Make sure you trust the network or use a firewall.")
-                                    .font(.caption)
-                                    .foregroundColor(.yellow)
-                            }
-                        }
-
-                        HStack {
-                            Text("Port:")
-                                .frame(width: 60, alignment: .leading)
-                            TextField("11535", text: $viewModel.portInput)
-                                .textFieldStyle(RoundedBorderTextFieldStyle())
-                                .disabled(viewModel.isRunning)
-                        }
-
-                        HStack {
-                            Spacer()
-                            Button("Reset to Defaults") {
-                                viewModel.resetToDefaults()
-                            }
-                            .buttonStyle(.borderless)
-                            .disabled(viewModel.isRunning)
-                        }
-                    }
-                }
-
-                // Available endpoints - More compact version
-                if viewModel.isRunning {
-                    GroupBox("All Available Endpoints") {
-                        VStack(alignment: .leading, spacing: 8) {
-                            EndpointRow(method: "GET", path: "/health", description: "Health check")
-                            EndpointRow(method: "GET", path: "/status", description: "Model status")
-                            EndpointRow(
-                                method: "GET", path: "/v1/models", description: "List models")
-                            EndpointRow(
-                                method: "POST", path: "/v1/chat/completions",
-                                description: "Chat completions")
-                        }
-                    }
-                }
-
-                HStack {
-                    Toggle("Show in Dock", isOn: $showInDock)
-                        .toggleStyle(.switch)
-                        .controlSize(.small)
-                        .onChange(of: showInDock) { _, newValue in
-                            applyDockVisibility(newValue)
-                        }
-
-                    Spacer()
-
-                    Button("Open Chat") {
-                        openWindow(id: chatWindowID)
-                        NSApp.activate()
-                    }
-
-                    Button("Quit") {
-                        NSApplication.shared.terminate(nil)
-                    }
-                    .keyboardShortcut("q")
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                SectionTitle("Models")
+                ForEach(viewModel.modelStatuses, id: \.id) { status in
+                    ModelRow(status: status)
                 }
             }
-            .padding()
+            .padding(12)
+
+            Divider()
+            VStack(spacing: 0) {
+                MenuRow("Open Chat", systemImage: "bubble.left.and.text.bubble.right") {
+                    dismiss()
+                    openWindow(id: chatWindowID)
+                    NSApp.activate()
+                }
+                MenuRow("Settings…", systemImage: "gearshape", shortcut: "⌘,") {
+                    dismiss()
+                    openSettings()
+                    NSApp.activate()
+                }
+                .keyboardShortcut(",")
+                MenuRow("Quit", systemImage: "power", shortcut: "⌘Q") {
+                    NSApplication.shared.terminate(nil)
+                }
+                .keyboardShortcut("q")
+            }
+            .padding(5)
         }
-        .frame(width: 520, height: 640)
+        .frame(width: 320)
+    }
+
+    private var header: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.white)
+                .frame(width: 32, height: 32)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.accentColor.gradient)
+                )
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Apple Intelligence API")
+                    .font(.headline)
+                HStack(spacing: 5) {
+                    Circle()
+                        .fill(statusColor)
+                        .frame(width: 7, height: 7)
+                    Text(statusText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+
+            Spacer()
+
+            if isBusy {
+                ProgressView()
+                    .controlSize(.small)
+            }
+
+            Toggle("Server", isOn: serverBinding)
+                .toggleStyle(.switch)
+                .labelsHidden()
+                .disabled(isBusy || viewModel.isCheckingModel || !viewModel.isModelAvailable)
+                .help(viewModel.isRunning ? "Stop the server" : "Start the server")
+        }
+    }
+
+    private var serverBinding: Binding<Bool> {
+        Binding(
+            get: { viewModel.isRunning },
+            set: { isOn in
+                Task {
+                    isBusy = true
+                    if isOn {
+                        await viewModel.startServer()
+                    } else {
+                        await viewModel.stopServer()
+                    }
+                    isBusy = false
+                }
+            }
+        )
+    }
+
+    private var statusText: String {
+        if viewModel.isRunning {
+            return "Running on \(viewModel.configuration.host):\(String(viewModel.configuration.port))"
+        }
+        if viewModel.isCheckingModel { return "Checking Apple Intelligence…" }
+        if !viewModel.isModelAvailable { return "Apple Intelligence unavailable" }
+        return "Stopped"
+    }
+
+    private var statusColor: Color {
+        if viewModel.isRunning { return .green }
+        if !viewModel.isModelAvailable && !viewModel.isCheckingModel { return .orange }
+        return .secondary
+    }
+
+    private var issue: Issue? {
+        if let error = viewModel.lastError {
+            return Issue(message: error, isError: true, canRetry: false)
+        }
+        if !viewModel.isModelAvailable && !viewModel.isCheckingModel {
+            return Issue(
+                message: viewModel.modelUnavailableReason ?? "Apple Intelligence is not available",
+                isError: false, canRetry: true)
+        }
+        return nil
     }
 }
 
 // MARK: - Helper Views
-struct ModelRow: View {
-    let status: ModelStatus
-    let onCopy: () -> Void
+struct Issue {
+    let message: String
+    let isError: Bool
+    let canRetry: Bool
+}
+
+struct IssueRow: View {
+    let issue: Issue
+    let onRetry: () -> Void
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline) {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: issue.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(issue.isError ? .red : .orange)
+            Text(issue.message)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if issue.canRetry {
+                Button("Retry", action: onRetry)
+                    .controlSize(.small)
+            }
+        }
+    }
+}
+
+struct SectionTitle: View {
+    let title: String
+
+    init(_ title: String) {
+        self.title = title
+    }
+
+    var body: some View {
+        Text(title)
+            .font(.caption)
+            .fontWeight(.semibold)
+            .foregroundStyle(.secondary)
+    }
+}
+
+struct ModelRow: View {
+    let status: ModelStatus
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
             Circle()
-                .fill(status.available ? Color.green : Color.orange)
-                .frame(width: 8, height: 8)
+                .fill(status.available ? Color.green : Color.secondary.opacity(0.5))
+                .frame(width: 6, height: 6)
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(status.id)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
+                    .font(.system(.callout, design: .monospaced))
+                    .foregroundStyle(status.available ? .primary : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
                 if let reason = status.reason {
                     Text(reason)
                         .font(.caption)
-                        .foregroundColor(.orange)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 0)
 
-            Button("Copy") {
-                onCopy()
-            }
-            .buttonStyle(.borderless)
-            .disabled(!status.available)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.gray.opacity(0.1))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
-    }
-}
-
-struct APIEndpointRow: View {
-    let title: String
-    let subtitle: String
-    let url: String
-    let onCopy: () -> Void
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(title)
-                    .font(.subheadline)
-                    .fontWeight(.medium)
-                Text(subtitle)
+            if status.available && status.imageInput {
+                Image(systemName: "photo")
                     .font(.caption)
-                    .foregroundColor(.secondary)
+                    .foregroundStyle(.secondary)
+                    .help("Accepts images")
             }
 
-            Spacer()
-
-            HStack {
-                Text(url)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                    .lineLimit(1)
-
-                Button("Copy") {
-                    onCopy()
-                }
-                .buttonStyle(.borderless)
+            if status.available {
+                CopyButton(text: status.id)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(Color.gray.opacity(0.1))
-            .clipShape(RoundedRectangle(cornerRadius: 8))
         }
     }
 }
 
-struct CodeBlock: View {
-    let code: String
-    let onCopy: () -> Void
+/// Full-width command row that highlights on hover, like a menu item
+struct MenuRow: View {
+    let title: String
+    let systemImage: String
+    let shortcut: String?
+    let action: () -> Void
+    @State private var isHovering = false
+
+    init(
+        _ title: String, systemImage: String, shortcut: String? = nil,
+        action: @escaping () -> Void
+    ) {
+        self.title = title
+        self.systemImage = systemImage
+        self.shortcut = shortcut
+        self.action = action
+    }
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 8) {
-            HStack {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    Text(code)
-                        .font(.system(.caption, design: .monospaced))
-                        .textSelection(.enabled)
-                        .padding()
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .frame(width: 18)
+                    .foregroundStyle(.secondary)
+                Text(title)
+                Spacer()
+                if let shortcut {
+                    Text(shortcut)
+                        .foregroundStyle(.tertiary)
                 }
-                .background(Color.gray.opacity(0.1))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
             }
-
-            Button("Copy Code") {
-                onCopy()
-            }
-            .buttonStyle(.borderless)
-            .font(.caption)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 5)
+            .contentShape(Rectangle())
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(isHovering ? Color.primary.opacity(0.08) : .clear)
+            )
         }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
     }
 }
 
-struct EndpointRow: View {
-    let method: String
-    let path: String
-    let description: String
+struct CopyButton: View {
+    let text: String
+    @State private var didCopy = false
 
     var body: some View {
-        HStack {
-            Text(method)
-                .font(.system(.caption, design: .monospaced))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(methodColor.opacity(0.2))
-                .foregroundColor(methodColor)
-                .clipShape(RoundedRectangle(cornerRadius: 4))
-
-            Text(path)
-                .font(.system(.body, design: .monospaced))
-
-            Text("•")
-                .foregroundColor(.secondary)
-
-            Text(description)
-                .foregroundColor(.secondary)
-
-            Spacer()
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            didCopy = true
+            Task {
+                try? await Task.sleep(for: .seconds(1.5))
+                didCopy = false
+            }
+        } label: {
+            Image(systemName: didCopy ? "checkmark" : "doc.on.doc")
+                .contentTransition(.symbolEffect(.replace))
+                .foregroundStyle(didCopy ? Color.green : Color.secondary)
+                .frame(width: 16)
         }
-    }
-
-    private var methodColor: Color {
-        switch method {
-        case "GET": return .green
-        case "POST": return .blue
-        case "PUT": return .orange
-        case "DELETE": return .red
-        default: return .gray
-        }
+        .buttonStyle(.borderless)
+        .help("Copy")
     }
 }
 

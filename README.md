@@ -94,16 +94,18 @@ This project is implemented as a GUI application rather than a command-line tool
 ### Starting the Server
 
 1. Launch the app — a brain icon appears in the menu bar (there is no Dock icon or main window)
-2. Click the icon to open the panel and configure server settings (default: `127.0.0.1:11535`)
-3. Click "Start Server" — the menu bar icon fills in while the server is running
-4. Server will be available at the configured address
-5. Use the "Quit" button (⌘Q) at the bottom of the panel to exit the app
+2. Click the icon to open the panel
+3. Turn on the switch next to "Apple Intelligence API" — the status line shows the address and the menu bar icon fills in while the server is running
+4. Copy the base URL or a model ID from the panel
+5. Choose "Quit" (⌘Q) in the panel to exit the app
+
+The bind address and port (default: `127.0.0.1:11535`) are in **Settings… (⌘,) > Server**; stop the server to change them. **Settings > API** lists every endpoint with a ready-to-copy Python example.
 
 ### Dock Mode and Chat Window
 
-- **Show in Dock**: The toggle at the bottom of the panel switches the app between menu-bar-only and a regular Dock app. It takes effect immediately and is remembered; in Dock mode the chat window opens at launch.
-- **Open Chat**: Opens a chat window for talking to the selected model. Pick the model from the toolbar (switching models starts a new chat), press Return to send, and use the stop button to cancel a response. Messages go straight to the model, so the API server doesn't need to be running.
-- **Images (macOS 27+)**: Use the paperclip to choose image files or paste an image URL, or drop image files / links onto the chat. Attachments are limited to 20 MB each. The paperclip is disabled on macOS 26 and for models without the vision capability.
+- **Show in Dock**: In **Settings > General**, switches the app between menu-bar-only and a regular Dock app. It takes effect immediately and is remembered; in Dock mode the chat window opens at launch.
+- **Open Chat**: Opens a chat window for talking to the selected model. Pick the model from the toolbar (switching models starts a new chat), press Return to send, and use the stop button to cancel a response. Start a new chat with ⌘N. Messages go straight to the model, so the API server doesn't need to be running.
+- **Images (macOS 27+)**: Use the + button in the message field to choose image files or add an image URL, or drop image files / links onto the chat. Attachments are limited to 20 MB each. The + button is hidden on macOS 26 and for models without image support.
 
 Keeping the chat window in front also keeps the app in the foreground, which avoids the background rate limits described above.
 

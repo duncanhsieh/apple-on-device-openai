@@ -47,5 +47,9 @@ struct AppleOnDeviceOpenAIApp: App {
         .defaultSize(width: 640, height: 720)
         // Open the chat window at launch only in Dock mode
         .defaultLaunchBehavior(showInDock ? .presented : .suppressed)
+
+        Settings {
+            SettingsView(viewModel: viewModel)
+        }
     }
 }

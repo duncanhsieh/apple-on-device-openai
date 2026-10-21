@@ -193,111 +193,66 @@ struct ChatView: View {
     @State private var isImporterPresented = false
     @State private var isURLPromptPresented = false
     @State private var imageURLInput = ""
+    @State private var isDropTargeted = false
+
+    private static let suggestions = [
+        "Write a haiku about autumn in Taipei",
+        "Explain recursion to a ten-year-old",
+        "Give me three name ideas for a coffee shop",
+    ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 12) {
-                        ForEach(chat.entries) { entry in
-                            ChatBubble(entry: entry)
-                                .id(entry.id)
-                        }
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(chat.entries) { entry in
+                        ChatBubble(entry: entry)
+                            .id(entry.id)
                     }
-                    .padding()
                 }
-                .onChange(of: chat.entries.last?.text) {
-                    if let last = chat.entries.last {
-                        proxy.scrollTo(last.id, anchor: .bottom)
-                    }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+            }
+            .defaultScrollAnchor(.bottom)
+            .onChange(of: chat.entries.last?.text) {
+                if let last = chat.entries.last {
+                    proxy.scrollTo(last.id, anchor: .bottom)
                 }
             }
-            .overlay {
-                if chat.entries.isEmpty {
-                    ContentUnavailableView(
-                        "Chat with Apple Intelligence",
-                        systemImage: "brain.head.profile",
-                        description: Text(
-                            "Messages go straight to the selected model. The API server doesn't need to be running."
-                        )
-                    )
-                }
-            }
-
-            Divider()
-
-            if !chat.pendingImages.isEmpty || chat.isLoadingImage || chat.attachmentError != nil {
-                AttachmentTray(chat: chat)
-            }
-
-            HStack(alignment: .bottom, spacing: 8) {
-                Menu {
-                    Button("Choose Image…", systemImage: "photo") {
-                        isImporterPresented = true
-                    }
-                    Button("Image from URL…", systemImage: "link") {
-                        imageURLInput = ""
-                        isURLPromptPresented = true
-                    }
-                } label: {
-                    Image(systemName: "paperclip")
-                        .font(.title3)
-                }
-                .menuStyle(.borderlessButton)
-                .menuIndicator(.hidden)
-                .fixedSize()
-                .disabled(!chat.supportsImages || chat.isResponding)
-                .help(
-                    chat.supportsImages
-                        ? "Attach an image (or drop one onto the chat)"
-                        : chat.selectedModel.imagesUnsupportedReason)
-
-                TextField("Message", text: $chat.input, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...6)
-                    .focused($isInputFocused)
-                    .onSubmit { chat.send() }
-
-                if chat.isResponding {
-                    Button {
-                        chat.stop()
-                    } label: {
-                        Image(systemName: "stop.circle.fill")
-                            .font(.title2)
-                    }
-                    .buttonStyle(.borderless)
-                    .help("Stop generating")
-                } else {
-                    Button {
-                        chat.send()
-                    } label: {
-                        Image(systemName: "arrow.up.circle.fill")
-                            .font(.title2)
-                    }
-                    .buttonStyle(.borderless)
-                    .disabled(!chat.canSend)
-                    .help("Send (Return)")
-                }
-            }
-            .padding(12)
         }
+        .overlay {
+            if chat.entries.isEmpty {
+                emptyState
+            }
+        }
+        .overlay {
+            if isDropTargeted {
+                DropHighlight()
+            }
+        }
+        .safeAreaBar(edge: .bottom, spacing: 0) {
+            composer
+        }
+        .frame(minWidth: 420, minHeight: 360)
         .toolbar {
-            ToolbarItem {
+            ToolbarItem(placement: .primaryAction) {
                 Picker("Model", selection: $chat.selectedModel) {
                     ForEach(AppleModel.allCases, id: \.self) { model in
-                        Text(
-                            model.availability().available
-                                ? model.displayName : "\(model.displayName) (unavailable)"
-                        )
-                        .tag(model)
+                        Text(model.displayName)
+                            .tag(model)
+                            .selectionDisabled(!model.availability().available)
                     }
                 }
-                .help("Switching models starts a new chat")
+                .pickerStyle(.menu)
+                .help("Model (switching starts a new chat)")
             }
-            ToolbarItem {
+            ToolbarItem(placement: .primaryAction) {
                 Button("New Chat", systemImage: "square.and.pencil") {
                     chat.reset()
+                    isInputFocused = true
                 }
+                .keyboardShortcut("n")
+                .disabled(chat.entries.isEmpty)
             }
         }
         .navigationTitle("Chat")
@@ -314,22 +269,139 @@ struct ChatView: View {
                 chat.attachmentError = error.localizedDescription
             }
         }
-        .alert("Image from URL", isPresented: $isURLPromptPresented) {
+        .alert("Add Image from URL", isPresented: $isURLPromptPresented) {
             TextField("https://example.com/image.jpg", text: $imageURLInput)
             Button("Add") {
                 chat.addImage(fromURLString: imageURLInput)
             }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter the address of a PNG, JPEG, HEIC or other image.")
         }
         .dropDestination(for: URL.self) { urls, _ in
             guard chat.supportsImages, !chat.isResponding else { return false }
             chat.addDroppedImages(urls)
             return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted && chat.supportsImages
         }
+    }
+
+    private var emptyState: some View {
+        ContentUnavailableView {
+            Label("Chat with Apple Intelligence", systemImage: "brain.head.profile")
+        } description: {
+            Text("Messages go straight to the model on this Mac. The API server doesn't need to be running.")
+        } actions: {
+            VStack(spacing: 8) {
+                ForEach(Self.suggestions, id: \.self) { suggestion in
+                    Button(suggestion) {
+                        chat.input = suggestion
+                        chat.send()
+                    }
+                    .buttonStyle(.bordered)
+                    .buttonBorderShape(.capsule)
+                }
+            }
+        }
+    }
+
+    private var composer: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if !chat.pendingImages.isEmpty || chat.isLoadingImage || chat.attachmentError != nil {
+                AttachmentTray(chat: chat)
+            }
+
+            HStack(alignment: .bottom, spacing: 8) {
+                if chat.supportsImages {
+                    Menu {
+                        Button("Choose Image…", systemImage: "photo") {
+                            isImporterPresented = true
+                        }
+                        Button("Add Image from URL…", systemImage: "link") {
+                            imageURLInput = ""
+                            isURLPromptPresented = true
+                        }
+                    } label: {
+                        Image(systemName: "plus")
+                            .font(.system(size: 13, weight: .semibold))
+                    }
+                    .menuStyle(.button)
+                    .menuIndicator(.hidden)
+                    .buttonStyle(.borderless)
+                    .buttonBorderShape(.circle)
+                    .fixedSize()
+                    .frame(height: 22)
+                    .disabled(chat.isResponding)
+                    .help("Attach an image, or drop one onto the chat")
+                }
+
+                TextField("Message", text: $chat.input, axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .lineLimit(1...8)
+                    .focused($isInputFocused)
+                    .onSubmit { chat.send() }
+                    .frame(minHeight: 22)
+
+                if chat.isResponding {
+                    Button {
+                        chat.stop()
+                    } label: {
+                        Image(systemName: "stop.circle.fill")
+                            .font(.system(size: 22))
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Stop responding")
+                } else {
+                    Button {
+                        chat.send()
+                    } label: {
+                        Image(systemName: "arrow.up.circle.fill")
+                            .font(.system(size: 22))
+                            .foregroundStyle(chat.canSend ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!chat.canSend)
+                    .help("Send")
+                }
+            }
+            .padding(.leading, chat.supportsImages ? 6 : 12)
+            .padding(.trailing, 5)
+            .padding(.vertical, 5)
+            .background(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .fill(.background)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(.separator)
+            )
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 12)
     }
 }
 
 // MARK: - Helper Views
+struct DropHighlight: View {
+    var body: some View {
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+            .background(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.08))
+            )
+            .overlay {
+                Label("Drop images to attach", systemImage: "photo.on.rectangle.angled")
+                    .font(.headline)
+                    .foregroundStyle(Color.accentColor)
+            }
+            .padding(8)
+            .allowsHitTesting(false)
+    }
+}
+
 struct AttachmentTray: View {
     @ObservedObject var chat: ChatViewModel
 
@@ -338,37 +410,36 @@ struct AttachmentTray: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(chat.pendingImages) { image in
-                        ZStack(alignment: .topTrailing) {
-                            ChatThumbnail(image: image, size: 64)
-
-                            Button {
-                                chat.removePendingImage(image.id)
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .foregroundStyle(.white, .black.opacity(0.6))
+                        ChatThumbnail(image: image, size: 56)
+                            .overlay(alignment: .topTrailing) {
+                                Button {
+                                    chat.removePendingImage(image.id)
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .symbolRenderingMode(.palette)
+                                        .foregroundStyle(.white, .black.opacity(0.55))
+                                }
+                                .buttonStyle(.borderless)
+                                .padding(3)
+                                .help("Remove")
                             }
-                            .buttonStyle(.borderless)
-                            .padding(2)
-                            .help("Remove image")
-                        }
                     }
 
                     if chat.isLoadingImage {
-                        ProgressView()
-                            .controlSize(.small)
-                            .frame(width: 64, height: 64)
+                        RoundedRectangle(cornerRadius: 10, style: .continuous)
+                            .fill(.quaternary)
+                            .frame(width: 56, height: 56)
+                            .overlay { ProgressView().controlSize(.small) }
                     }
                 }
             }
 
             if let error = chat.attachmentError {
-                Text(error)
+                Label(error, systemImage: "exclamationmark.triangle.fill")
                     .font(.caption)
-                    .foregroundColor(.red)
+                    .foregroundStyle(.red)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.top, 8)
     }
 }
 
@@ -381,40 +452,49 @@ struct ChatThumbnail: View {
             .resizable()
             .scaledToFill()
             .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(.separator)
+            )
     }
 }
 
 struct ChatBubble: View {
     let entry: ChatEntry
 
+    private var isUser: Bool { entry.role == .user }
+
     var body: some View {
-        HStack {
-            if entry.role == .user { Spacer(minLength: 60) }
-
-            VStack(alignment: entry.role == .user ? .trailing : .leading, spacing: 6) {
-                if !entry.images.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(entry.images) { image in
-                            ChatThumbnail(image: image, size: 120)
-                        }
+        VStack(alignment: isUser ? .trailing : .leading, spacing: 4) {
+            if !entry.images.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(entry.images) { image in
+                        ChatThumbnail(image: image, size: 140)
                     }
-                }
-
-                if !entry.text.isEmpty || entry.images.isEmpty {
-                    bubble
                 }
             }
 
-            if entry.role == .assistant { Spacer(minLength: 60) }
+            if !entry.text.isEmpty || entry.images.isEmpty {
+                bubble
+            }
         }
+        .frame(maxWidth: .infinity, alignment: isUser ? .trailing : .leading)
+        .padding(isUser ? .leading : .trailing, 60)
     }
 
+    @ViewBuilder
     private var bubble: some View {
         Group {
             if entry.text.isEmpty {
-                ProgressView()
-                    .controlSize(.small)
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 17, weight: .bold))
+                    .symbolEffect(.variableColor.iterative, options: .repeating)
+                    .foregroundStyle(.secondary)
+                    .frame(height: 18)
+            } else if entry.isError {
+                Label(entry.text, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red)
             } else {
                 Text(entry.text)
                     .textSelection(.enabled)
@@ -422,14 +502,17 @@ struct ChatBubble: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(background)
-        .foregroundColor(entry.role == .user ? .white : .primary)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .foregroundStyle(isUser ? Color.white : Color.primary)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(background)
+        )
     }
 
-    private var background: Color {
-        if entry.isError { return Color.red.opacity(0.2) }
-        return entry.role == .user ? Color.accentColor : Color.gray.opacity(0.15)
+    private var background: AnyShapeStyle {
+        if entry.isError { return AnyShapeStyle(Color.red.opacity(0.12)) }
+        if isUser { return AnyShapeStyle(Color.accentColor) }
+        return AnyShapeStyle(.quaternary)
     }
 }
 

@@ -91,8 +91,12 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 - Shared by the API and the chat window
 
 **ContentView** (`ContentView.swift`)
-- Menu bar panel UI with server configuration and status; receives the shared `ServerViewModel`
-- Lists every model with its availability, plus "Show in Dock" toggle, "Open Chat" and Quit buttons
+- Menu bar panel (Control Center style, 320 pt wide); receives the shared `ServerViewModel`
+- Header with a server on/off switch and status line, base URL with copy, model list, and menu-style rows (Open Chat, Settings…, Quit) that call `dismiss()` to close the panel
+- Also holds `ServerViewModel` and small shared views (`CopyButton`, `SectionTitle`, `MenuRow`)
+
+**SettingsView** (`SettingsView.swift`)
+- `Settings` scene with General (Show in Dock), Server (bind address, port, restore defaults) and API (endpoints, Python example) tabs, all `Form` + `.formStyle(.grouped)`
 - Displays server URLs, endpoints, and integration examples
 - Provides network interface picker for bind address (127.0.0.1, 0.0.0.0, or specific IPs)
 - Includes refresh button to rescan network interfaces

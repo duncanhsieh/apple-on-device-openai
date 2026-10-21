@@ -43,7 +43,7 @@ nonisolated enum AppleModel: String, CaseIterable, Sendable {
             guard Self.hasPrivateCloudComputeEntitlement else {
                 return (
                     false,
-                    "Private Cloud Compute requires the \(Self.privateCloudComputeEntitlement) entitlement; sign the app with your Apple Developer team"
+                    "Requires an app signed with the \(Self.privateCloudComputeEntitlement) entitlement"
                 )
             }
             switch PrivateCloudComputeLanguageModel().availability {
