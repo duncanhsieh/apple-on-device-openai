@@ -21,14 +21,27 @@ Use it in any OpenAI compatible app:
 - **Optional Dock Mode**: Turn on "Show in Dock" to run it as a regular app with a Dock icon
 - **Chat Window**: Built-in chat for trying the models directly, with streaming and multi-turn context; on macOS 27 you can also attach images
 - **Model Selection**: Choose the on-device model, its content-tagging mode, or Private Cloud Compute (macOS 27+) via the `model` field
+- **Image Input (macOS 27+)**: Send images with OpenAI `image_url` content parts (see [Compatibility](#compatibility))
+- **OpenAI-style Errors**: Errors come back as OpenAI error JSON with matching HTTP status (429 for rate limits, 400 `context_length_exceeded`, …)
 - **🚧 Tool Using (WIP)**: Function calling capabilities for extended AI functionality
 
 ## Requirements
 
-- **macOS**: 26 beta 2
+- **macOS**: 26.0 or later (macOS 27 supported)
 - **Apple Intelligence**: Must be enabled in Settings > Apple Intelligence & Siri
-- **Xcode**: 26 beta 2 (for building)
+- **Xcode**: 26.0 or later (for building); Xcode 27 is needed for Private Cloud Compute, image input and the macOS 27 error types
 - **Private Cloud Compute** (optional): macOS 27 or later; on older systems the model is reported as unavailable
+
+### Compatibility
+
+| Feature | macOS 26 | macOS 27 + app built with Xcode 26 | macOS 27 + app built with Xcode 27 |
+|---|---|---|---|
+| Text chat, multi-turn, streaming | ✅ | ✅ | ✅ |
+| OpenAI-style error codes (429, `context_length_exceeded`, …) | ✅ | Partial (macOS 27 errors are reported as 500) | ✅ |
+| Private Cloud Compute model | ❌ (HTTP 503) | ❌ (HTTP 503) | ✅ |
+| Image input (`image_url`, chat attachments) | ❌ (HTTP 400) | ❌ (HTTP 400) | ✅ (if the model reports vision support) |
+
+Check `GET /status`: `image_input_supported` (default model) and each entry's `image_input` in `models` tell you whether the running server accepts images.
 
 ## Installation
 
@@ -99,7 +112,7 @@ Keeping the chat window in front also keeps the app in the foreground, which avo
 Once the server is running, you can access these OpenAI-compatible endpoints:
 
 - `GET /health` - Health check
-- `GET /status` - Model availability and status, including a `models` array with each model's availability and reason
+- `GET /status` - Model availability and status, image input support, and a `models` array with each model's availability, reason and `image_input`
 - `GET /v1/models` - List models that are currently available on this Mac
 - `POST /v1/chat/completions` - Chat completions (streaming and non-streaming)
 
@@ -114,7 +127,7 @@ Pick a model with the OpenAI `model` field:
 | `apple-private-cloud-compute` | Apple's larger server model via Private Cloud Compute | macOS 27 |
 
 - Unknown model IDs (e.g. `gpt-4o` sent by default from existing clients) fall back to `apple-on-device`; the response's `model` field shows the model actually used.
-- Requesting an unavailable model returns HTTP `503` with the reason (streaming requests receive the error as an SSE event).
+- Requesting an unavailable model returns HTTP `503` with an OpenAI-style error (streaming requests receive the error as an SSE event).
 - The on-device model variant (e.g. `core3` / `coreAdvanced3`) is chosen by the system per device and cannot be selected.
 
 ### Example Usage
@@ -157,6 +170,29 @@ for chunk in response:
         print(chunk.choices[0].delta.content, end="")
 ```
 
+#### Image input
+
+Requires macOS 27 and an app built with Xcode 27. Images go in user messages as `image_url` parts:
+
+```python
+response = client.chat.completions.create(
+    model="apple-on-device",
+    messages=[{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this image."},
+            {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0..."}},
+        ],
+    }],
+)
+```
+
+- Supported URLs: base64 `data:` URLs and `http(s)` URLs (downloaded by the server, 30 s timeout). `file://` and other schemes are rejected.
+- Maximum image size: 20 MB. Any format ImageIO can decode (PNG, JPEG, HEIC, WebP, …) works; the framework scales the image itself.
+- Images in earlier user messages stay in the conversation history. Images in earlier `system` and `assistant` messages are ignored. `image_url.detail` is ignored.
+- When images aren't supported, the request fails with HTTP 400 and an `invalid_request_error`.
+- When the server listens on a LAN address, any client that can reach it can make it fetch `http(s)` image URLs.
+
 ## Testing
 
 You can use the included test script to verify the server is working correctly and see example usage patterns:
@@ -173,6 +209,7 @@ The test script will:
 - ✅ Test OpenAI SDK compatibility
 - ✅ Run multi-turn conversations
 - ✅ Test multilingual support (Chinese)
+- ✅ Test image input (or that it is rejected with HTTP 400 where unsupported)
 - ✅ Demonstrate streaming functionality
 
 Make sure the server is running before executing the test script. The script provides comprehensive examples of how to interact with the API using both direct HTTP requests and the OpenAI Python SDK.
@@ -182,9 +219,9 @@ Make sure the server is running before executing the test script. The script pro
 This server implements the OpenAI Chat Completions API with the following supported parameters:
 
 - `model` - Model identifier (see [Models](#models); defaults to `apple-on-device`)
-- `messages` - Array of conversation messages
-- `temperature` - Sampling temperature (0.0 to 2.0)
-- `max_tokens` - Maximum tokens in response
+- `messages` - Array of conversation messages; `content` may be a string, `null`, or an array of `text` / `image_url` parts. Multiple `system` / `developer` messages are merged into one set of instructions
+- `temperature` - Sampling temperature
+- `max_completion_tokens` / `max_tokens` - Maximum tokens in response
 - `stream` - Enable streaming responses
 
 ## Development Notes

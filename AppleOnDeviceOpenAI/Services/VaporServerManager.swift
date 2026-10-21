@@ -97,15 +97,19 @@ class VaporServerManager: ObservableObject {
 
             let models = AppleModel.allCases.map { model in
                 let (modelAvailable, modelReason) = model.availability()
-                return ModelStatus(id: model.rawValue, available: modelAvailable, reason: modelReason)
+                return ModelStatus(
+                    id: model.rawValue, available: modelAvailable, reason: modelReason,
+                    imageInput: model.supportsImages)
             }
 
             return ServerStatus(
                 modelAvailable: available,
                 reason: reason ?? "Model is available",
                 supportedLanguages: supportedLanguages,
-                serverVersion: "1.0.0",
+                serverVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString")
+                    as? String ?? "unknown",
                 appleIntelligenceCompatible: true,
+                imageInputSupported: AppleModel.onDevice.supportsImages,
                 models: models
             )
         }
@@ -142,19 +146,18 @@ class VaporServerManager: ObservableObject {
                 throw Abort(.badRequest, reason: "No messages provided")
             }
 
-            do {
-                // Handle streaming vs non-streaming
-                if chatRequest.stream == true {
-                    return try await self.handleStreamingResponse(chatRequest)
-                }
+            let appleModel = AppleModel(requested: chatRequest.model)
 
-                // Generate response using the manager
-                let appleModel = AppleModel(requested: chatRequest.model)
+            if chatRequest.stream == true {
+                return Self.makeStreamingResponse(chatRequest, model: appleModel)
+            }
+
+            do {
                 let response = try await aiManager.generateResponse(
                     for: chatRequest.messages,
                     model: appleModel,
                     temperature: chatRequest.temperature,
-                    maxTokens: chatRequest.maxTokens
+                    maxTokens: chatRequest.responseTokenLimit
                 )
 
                 let chatResponse = ChatCompletionResponse(
@@ -174,26 +177,32 @@ class VaporServerManager: ObservableObject {
                     ]
                 )
 
-                // Encode response as JSON
-                let jsonData = try JSONEncoder().encode(chatResponse)
-                var res = Response()
-                res.headers.contentType = .json
-                res.body = .init(data: jsonData)
-                return res
-            } catch let error as AbortError {
-                throw error
+                return try Self.jsonResponse(chatResponse)
             } catch {
-                throw Abort(
-                    .internalServerError,
-                    reason: "Error generating response: \(error.localizedDescription)")
+                let failure = GenerationFailure(error)
+                return try Self.jsonResponse(failure.errorResponse, status: failure.status)
             }
         }
     }
 
+    private nonisolated static func jsonResponse(
+        _ value: some Encodable, status: HTTPResponseStatus = .ok
+    ) throws -> Response {
+        let response = Response(status: status)
+        response.headers.contentType = .json
+        response.body = .init(data: try JSONEncoder().encode(value))
+        return response
+    }
+
+    private nonisolated static func sseEvent(_ value: some Encodable) throws -> ByteBuffer {
+        let json = String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+        return ByteBuffer(string: "data: \(json)\n\n")
+    }
+
     // Helper function to handle streaming responses
-    private func handleStreamingResponse(_ chatRequest: ChatCompletionRequest) async throws
-        -> Response
-    {
+    private nonisolated static func makeStreamingResponse(
+        _ chatRequest: ChatCompletionRequest, model appleModel: AppleModel
+    ) -> Response {
         let response = Response()
         response.headers.replaceOrAdd(name: .contentType, value: "text/event-stream")
         response.headers.replaceOrAdd(name: .cacheControl, value: "no-cache")
@@ -201,154 +210,61 @@ class VaporServerManager: ObservableObject {
         response.headers.replaceOrAdd(name: "Access-Control-Allow-Origin", value: "*")
         response.headers.replaceOrAdd(name: "Access-Control-Allow-Headers", value: "Cache-Control")
 
-        // Create the streaming body using Vapor's Response.Body(stream:)
-        response.body = Response.Body(stream: { writer in
-            Task {
-                do {
-                    // Check availability first
-                    print("DEBUG: Checking model availability")
-                    let appleModel = AppleModel(requested: chatRequest.model)
-                    let (available, reason) = appleModel.availability()
-                    guard available else {
-                        let errorData = """
-                            data: {"error": {"message": "\(reason ?? "\(appleModel.displayName) not available")", "type": "unavailable_error"}}
+        response.body = Response.Body(asyncStream: { writer in
+            let responseId = "chatcmpl-\(UUID().uuidString)"
+            let created = Int(Date().timeIntervalSince1970)
 
-                            data: [DONE]
+            func chunk(_ delta: ChatCompletionDelta, finishReason: String? = nil)
+                -> ChatCompletionStreamResponse
+            {
+                ChatCompletionStreamResponse(
+                    id: responseId,
+                    object: "chat.completion.chunk",
+                    created: created,
+                    model: appleModel.rawValue,
+                    choices: [
+                        ChatCompletionStreamChoice(
+                            index: 0, delta: delta, finishReason: finishReason)
+                    ]
+                )
+            }
 
-                            """
-                        try await writer.write(.buffer(ByteBuffer(string: errorData)))
-                        writer.write(.end)
-                        return
-                    }
+            do {
+                let (session, prompt) = try await aiManager.prepareSession(
+                    for: chatRequest.messages, model: appleModel)
+                let options = aiManager.makeOptions(
+                    temperature: chatRequest.temperature, maxTokens: chatRequest.responseTokenLimit)
 
-                    // Get the last message as the current prompt
-                    let lastMessage = chatRequest.messages.last!
-                    let currentPrompt = lastMessage.content
+                // First chunk carries the role
+                try await writer.write(
+                    .buffer(Self.sseEvent(chunk(ChatCompletionDelta(role: "assistant", content: "")))))
 
-                    // Convert previous messages (excluding the last one) to transcript
-                    print("DEBUG: Converting messages to transcript")
-                    let previousMessages =
-                        chatRequest.messages.count > 1 ? Array(chatRequest.messages.dropLast()) : []
-                    let transcriptEntries = await aiManager.convertMessagesToTranscript(
-                        previousMessages)
+                // Each snapshot holds the full text generated so far; send only the new part
+                var previousContent = ""
+                for try await snapshot in session.streamResponse(to: prompt, options: options) {
+                    let content = snapshot.content
+                    let delta =
+                        content.hasPrefix(previousContent)
+                        ? String(content.dropFirst(previousContent.count))
+                        : content
+                    previousContent = content
 
-                    // Create transcript with conversation history
-                    let transcript = Transcript(entries: transcriptEntries)
+                    if delta.isEmpty { continue }
+                    try await writer.write(
+                        .buffer(Self.sseEvent(chunk(ChatCompletionDelta(content: delta)))))
+                }
 
-                    // Create new session with the conversation transcript
-                    print("DEBUG: Creating language model session")
-                    let session = appleModel.makeSession(transcript: transcript)
-
-                    // Create generation options
-                    var options = GenerationOptions()
-                    if let temp = chatRequest.temperature {
-                        options = GenerationOptions(
-                            temperature: temp, maximumResponseTokens: chatRequest.maxTokens)
-                    } else if let maxTokens = chatRequest.maxTokens {
-                        options = GenerationOptions(maximumResponseTokens: maxTokens)
-                    }
-
-                    // Get the streaming response from the session
-                    print("DEBUG: Getting streaming response")
-                    let responseStream = session.streamResponse(to: currentPrompt, options: options)
-
-                    // Response metadata
-                    let responseId = "chatcmpl-\(UUID().uuidString)"
-                    let created = Int(Date().timeIntervalSince1970)
-
-                    // Track previous content to calculate deltas
-                    var previousContent = ""
-                    var isFirstChunk = true
-
-                    // Iterate through the stream and yield partial responses
-                    print("DEBUG: Starting stream iteration")
-                    for try await cumulativeResponse in responseStream {
-                        print("DEBUG: Processing stream chunk")
-                        // Calculate the delta (new content since last iteration)
-                        let deltaContent = String(cumulativeResponse.content.dropFirst(previousContent.count))
-
-                        // Skip empty deltas (except for the first chunk which might include role)
-                        if deltaContent.isEmpty && !isFirstChunk {
-                            continue
-                        }
-
-                        let streamResponse = ChatCompletionStreamResponse(
-                            id: responseId,
-                            object: "chat.completion.chunk",
-                            created: created,
-                            model: appleModel.rawValue,
-                            choices: [
-                                ChatCompletionStreamChoice(
-                                    index: 0,
-                                    delta: ChatCompletionDelta(
-                                        role: isFirstChunk ? "assistant" : nil,
-                                        content: deltaContent.isEmpty ? nil : deltaContent
-                                    ),
-                                    finishReason: nil
-                                )
-                            ]
-                        )
-
-                        let encoder = JSONEncoder()
-                        let jsonData = try encoder.encode(streamResponse)
-                        let sseData = "data: \(String(data: jsonData, encoding: .utf8)!)\n\n"
-
-                        print("DEBUG: Writing SSE data chunk: \(sseData)")
-                        try await writer.write(.buffer(ByteBuffer(string: sseData)))
-                        print("DEBUG: Successfully wrote SSE data chunk")
-
-                        // Update tracking variables
-                        previousContent = cumulativeResponse.content
-                        isFirstChunk = false
-                    }
-
-                    // Send final completion message
-                    let finalResponse = ChatCompletionStreamResponse(
-                        id: responseId,
-                        object: "chat.completion.chunk",
-                        created: created,
-                        model: appleModel.rawValue,
-                        choices: [
-                            ChatCompletionStreamChoice(
-                                index: 0,
-                                delta: ChatCompletionDelta(
-                                    role: nil,
-                                    content: nil
-                                ),
-                                finishReason: "stop"
-                            )
-                        ]
-                    )
-
-                    let encoder = JSONEncoder()
-                    let finalJsonData = try encoder.encode(finalResponse)
-                    let finalSseData = "data: \(String(data: finalJsonData, encoding: .utf8)!)\n\n"
-
-                    try await writer.write(.buffer(ByteBuffer(string: finalSseData)))
-
-                    // Send [DONE] to indicate stream completion
-                    try await writer.write(.buffer(ByteBuffer(string: "data: [DONE]\n\n")))
-
-                    // Complete the stream
-                    writer.write(.end)
-
-                } catch {
-                    // Print full error and stack trace to server output
-                    print("Error in chat completion stream: \(error)")
-                    print("Error details:")
-                    dump(error)
-
-                    // Handle errors by sending error message in SSE format
-                    let errorData = """
-                        data: {"error": {"message": "\(error.localizedDescription)", "type": "internal_error"}}
-
-                        data: [DONE]
-
-                        """
-                    try? await writer.write(.buffer(ByteBuffer(string: errorData)))
-                    writer.write(.end)
+                try await writer.write(
+                    .buffer(Self.sseEvent(chunk(ChatCompletionDelta(), finishReason: "stop"))))
+            } catch {
+                let failure = GenerationFailure(error)
+                if let buffer = try? Self.sseEvent(failure.errorResponse) {
+                    try? await writer.write(.buffer(buffer))
                 }
             }
+
+            try? await writer.write(.buffer(ByteBuffer(string: "data: [DONE]\n\n")))
+            try? await writer.write(.end)
         })
 
         return response

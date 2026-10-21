@@ -4,8 +4,11 @@ Test Apple On-Device OpenAI Compatible Server
 Make sure the server is running at http://localhost:11535 before running this script
 """
 
+import base64
 import requests
 import json
+import struct
+import zlib
 from openai import OpenAI
 
 # Server addresses
@@ -38,6 +41,7 @@ def test_status():
             print(f"   Model available: {data.get('model_available', False)}")
             print(f"   Reason: {data.get('reason', 'N/A')}")
             print(f"   Supported languages count: {len(data.get('supported_languages', []))}")
+            print(f"   Image input supported: {data.get('image_input_supported', False)}")
             return data.get('model_available', False)
         else:
             print(f"❌ Status check failed: {response.status_code}")
@@ -156,6 +160,51 @@ def test_streaming_chat_completion():
         return False
 
 
+def solid_color_png_data_url(rgb=(255, 0, 0), size=64):
+    """Build a data URL for a solid color PNG without third-party dependencies"""
+    def chunk(tag, data):
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    row = b"\x00" + bytes(rgb) * size
+    png = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(row * size))
+        + chunk(b"IEND", b"")
+    )
+    return "data:image/png;base64," + base64.b64encode(png).decode()
+
+def test_image_input():
+    """Test image input (macOS 27+); expects a 400 when the server doesn't support it"""
+    print("\n🖼️  Testing image input...")
+    supported = requests.get(f"{BASE_URL}/status").json().get("image_input_supported", False)
+    payload = {
+        "model": "apple-on-device",
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What color is this image? Answer with one word."},
+                {"type": "image_url", "image_url": {"url": solid_color_png_data_url()}},
+            ],
+        }],
+    }
+    try:
+        response = requests.post(f"{API_BASE_URL}/chat/completions", json=payload)
+        if supported and response.status_code == 200:
+            print("✅ Image input passed")
+            print(f"   Response: {response.json()['choices'][0]['message']['content']}")
+            return True
+        if not supported and response.status_code == 400:
+            print("✅ Image input correctly rejected (not supported on this system)")
+            print(f"   Reason: {response.json()['error']['message']}")
+            return True
+        print(f"❌ Image input failed: {response.status_code} {response.text}")
+        return False
+    except Exception as e:
+        print(f"❌ Image input error: {e}")
+        return False
+
 def main():
     """Main test function"""
     print("🚀 Starting Apple On-Device OpenAI Compatible Server Tests")
@@ -180,6 +229,7 @@ def main():
         
         test_chat_completion_openai_sdk()
         test_chinese_conversation()
+        test_image_input()
         
         print("\n" + "=" * 60)
         print("🌊 Testing streaming functionality")

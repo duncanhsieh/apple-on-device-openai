@@ -17,6 +17,7 @@ nonisolated struct ChatCompletionRequest: Content, Sendable {
     let model: String?
     let messages: [ChatMessage]
     let maxTokens: Int?
+    let maxCompletionTokens: Int?
     let temperature: Double?
     let topP: Double?
     let n: Int?
@@ -27,10 +28,14 @@ nonisolated struct ChatCompletionRequest: Content, Sendable {
     let logitBias: [String: Double]?
     let user: String?
 
+    /// `max_completion_tokens` replaces the deprecated `max_tokens` in current OpenAI clients
+    var responseTokenLimit: Int? { maxCompletionTokens ?? maxTokens }
+
     enum CodingKeys: String, CodingKey {
         case model
         case messages
         case maxTokens = "max_tokens"
+        case maxCompletionTokens = "max_completion_tokens"
         case temperature
         case topP = "top_p"
         case n
@@ -40,6 +45,30 @@ nonisolated struct ChatCompletionRequest: Content, Sendable {
         case frequencyPenalty = "frequency_penalty"
         case logitBias = "logit_bias"
         case user
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.model = try container.decodeIfPresent(String.self, forKey: .model)
+        self.messages = try container.decode([ChatMessage].self, forKey: .messages)
+        self.maxTokens = try container.decodeIfPresent(Int.self, forKey: .maxTokens)
+        self.maxCompletionTokens = try container.decodeIfPresent(
+            Int.self, forKey: .maxCompletionTokens)
+        self.temperature = try container.decodeIfPresent(Double.self, forKey: .temperature)
+        self.topP = try container.decodeIfPresent(Double.self, forKey: .topP)
+        self.n = try container.decodeIfPresent(Int.self, forKey: .n)
+        self.stream = try container.decodeIfPresent(Bool.self, forKey: .stream)
+        // `stop` may be a single string or an array of strings
+        if let single = try? container.decodeIfPresent(String.self, forKey: .stop) {
+            self.stop = [single]
+        } else {
+            self.stop = try container.decodeIfPresent([String].self, forKey: .stop)
+        }
+        self.presencePenalty = try container.decodeIfPresent(Double.self, forKey: .presencePenalty)
+        self.frequencyPenalty = try container.decodeIfPresent(
+            Double.self, forKey: .frequencyPenalty)
+        self.logitBias = try container.decodeIfPresent([String: Double].self, forKey: .logitBias)
+        self.user = try container.decodeIfPresent(String.self, forKey: .user)
     }
 }
 
@@ -65,11 +94,14 @@ nonisolated struct ChatMessage: Content, Sendable {
     let role: String
     let content: String
     let name: String?
+    /// URLs from `image_url` content parts (data URLs or http(s) URLs)
+    let imageURLs: [String]
 
-    init(role: String, content: String, name: String? = nil) {
+    init(role: String, content: String, name: String? = nil, imageURLs: [String] = []) {
         self.role = role
         self.content = content
         self.name = name
+        self.imageURLs = imageURLs
     }
     
     // Custom decoder to handle both string and array content formats
@@ -80,14 +112,22 @@ nonisolated struct ChatMessage: Content, Sendable {
         self.name = try container.decodeIfPresent(String.self, forKey: .name)
         
         // Try to decode content as string first
-        if let stringContent = try? container.decode(String.self, forKey: .content) {
+        if try !container.contains(.content) || container.decodeNil(forKey: .content) {
+            // Assistant messages that only carry tool calls have null content
+            self.content = ""
+            self.imageURLs = []
+        } else if let stringContent = try? container.decode(String.self, forKey: .content) {
             self.content = stringContent
+            self.imageURLs = []
         } else if let arrayContent = try? container.decode([MessageContent].self, forKey: .content) {
-            // Extract text from structured content array
+            // Extract text and images from structured content array
             let textParts = arrayContent.compactMap { contentItem in
                 contentItem.type == "text" ? contentItem.text : nil
             }
             self.content = textParts.joined(separator: " ")
+            self.imageURLs = arrayContent.compactMap { contentItem in
+                contentItem.type == "image_url" ? contentItem.imageUrl?.url : nil
+            }
         } else {
             throw DecodingError.typeMismatch(
                 String.self,
@@ -99,6 +139,9 @@ nonisolated struct ChatMessage: Content, Sendable {
         }
     }
     
+    /// True when the message has neither text nor images
+    var isEmpty: Bool { content.isEmpty && imageURLs.isEmpty }
+
     // Custom encoder to always encode as string
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
@@ -185,6 +228,8 @@ nonisolated struct ServerStatus: Content, Sendable {
     let supportedLanguages: [String]
     let serverVersion: String
     let appleIntelligenceCompatible: Bool
+    /// Whether the default on-device model accepts `image_url` parts
+    let imageInputSupported: Bool
     let models: [ModelStatus]
 
     enum CodingKeys: String, CodingKey {
@@ -193,6 +238,7 @@ nonisolated struct ServerStatus: Content, Sendable {
         case supportedLanguages = "supported_languages"
         case serverVersion = "server_version"
         case appleIntelligenceCompatible = "apple_intelligence_compatible"
+        case imageInputSupported = "image_input_supported"
         case models
     }
 }
@@ -201,6 +247,21 @@ nonisolated struct ModelStatus: Content, Sendable {
     let id: String
     let available: Bool
     let reason: String?
+    let imageInput: Bool
+
+    init(id: String, available: Bool, reason: String?, imageInput: Bool = false) {
+        self.id = id
+        self.available = available
+        self.reason = reason
+        self.imageInput = imageInput
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case available
+        case reason
+        case imageInput = "image_input"
+    }
 }
 
 // MARK: - Error Response

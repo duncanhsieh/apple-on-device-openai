@@ -5,7 +5,6 @@
 
 import Combine
 import FoundationModels
-import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -30,20 +29,6 @@ struct ChatImage: Identifiable {
     let cgImage: CGImage
 }
 
-enum ChatImageError: LocalizedError {
-    case unreadable
-    case invalidURL
-    case tooLarge
-
-    var errorDescription: String? {
-        switch self {
-        case .unreadable: return "The file isn't an image that can be read"
-        case .invalidURL: return "Enter an http(s) image URL"
-        case .tooLarge: return "Images must be 20 MB or smaller"
-        }
-    }
-}
-
 // MARK: - ViewModel
 /// Talks to the selected model directly, so chatting works without the API server running
 @MainActor
@@ -59,8 +44,6 @@ class ChatViewModel: ObservableObject {
             if oldValue != selectedModel { reset() }
         }
     }
-
-    private static let maxImageBytes = 20 * 1024 * 1024
 
     var supportsImages: Bool {
         selectedModel.supportsImages
@@ -142,31 +125,24 @@ class ChatViewModel: ObservableObject {
 
         do {
             let data = try Data(contentsOf: url)
-            try appendImage(data)
+            pendingImages.append(ChatImage(cgImage: try ImageLoader.decodeImage(data)))
+            attachmentError = nil
         } catch {
-            attachmentError = error.localizedDescription
+            attachmentError = ImageLoader.message(for: error)
         }
     }
 
+    /// Load an image from a pasted http(s) or data URL (same rules as the API's `image_url`)
     func addImage(fromURLString string: String) {
-        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed), ["http", "https"].contains(url.scheme?.lowercased())
-        else {
-            attachmentError = ChatImageError.invalidURL.localizedDescription
-            return
-        }
-        addImage(fromRemote: url)
-    }
-
-    func addImage(fromRemote url: URL) {
+        let urlString = string.trimmingCharacters(in: .whitespacesAndNewlines)
         isLoadingImage = true
         attachmentError = nil
         Task {
             do {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                try appendImage(data)
+                let image = try await ImageLoader.loadImage(from: urlString)
+                pendingImages.append(ChatImage(cgImage: image))
             } catch {
-                attachmentError = "Couldn't load image: \(error.localizedDescription)"
+                attachmentError = ImageLoader.message(for: error)
             }
             isLoadingImage = false
         }
@@ -178,7 +154,7 @@ class ChatViewModel: ObservableObject {
             if url.isFileURL {
                 addImage(fromFile: url)
             } else {
-                addImage(fromRemote: url)
+                addImage(fromURLString: url.absoluteString)
             }
         }
     }
@@ -187,18 +163,10 @@ class ChatViewModel: ObservableObject {
         pendingImages.removeAll { $0.id == id }
     }
 
-    private func appendImage(_ data: Data) throws {
-        guard data.count <= Self.maxImageBytes else { throw ChatImageError.tooLarge }
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-            let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
-        else { throw ChatImageError.unreadable }
-        pendingImages.append(ChatImage(cgImage: cgImage))
-        attachmentError = nil
-    }
-
     private func stream(_ session: LanguageModelSession, prompt: String, images: [ChatImage])
         -> LanguageModelSession.ResponseStream<String>
     {
+        #if compiler(>=6.4)
         if #available(macOS 27.0, *), !images.isEmpty {
             return session.streamResponse {
                 prompt
@@ -207,6 +175,7 @@ class ChatViewModel: ObservableObject {
                 }
             }
         }
+        #endif
         return session.streamResponse(to: prompt)
     }
 
