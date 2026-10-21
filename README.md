@@ -17,6 +17,8 @@ Use it in any OpenAI compatible app:
 - **Streaming Support**: Real-time streaming responses compatible with OpenAI's streaming format
 - **On-Device Processing**: Uses Apple's Foundation Models for completely local AI processing
 - **Model Availability Check**: Automatically checks Apple Intelligence availability on startup
+- **Menu Bar App**: Lives in the menu bar (no Dock icon); the icon fills in while the server is running
+- **Model Selection**: Choose the on-device model, its content-tagging mode, or Private Cloud Compute (macOS 27+) via the `model` field
 - **🚧 Tool Using (WIP)**: Function calling capabilities for extended AI functionality
 
 ## Requirements
@@ -24,6 +26,7 @@ Use it in any OpenAI compatible app:
 - **macOS**: 26 beta 2
 - **Apple Intelligence**: Must be enabled in Settings > Apple Intelligence & Siri
 - **Xcode**: 26 beta 2 (for building)
+- **Private Cloud Compute** (optional): macOS 27 or later; on older systems the model is reported as unavailable
 
 ## Installation
 
@@ -48,6 +51,14 @@ open AppleOnDeviceOpenAI.xcodeproj
 
 3. Build and run the project in Xcode
 
+Or build from the command line (ad-hoc signed, output in `build/`):
+```bash
+xcodebuild -project AppleOnDeviceOpenAI.xcodeproj -scheme AppleOnDeviceOpenAI \
+  -configuration Debug -derivedDataPath build \
+  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build
+open build/Build/Products/Debug/AppleOnDeviceOpenAI.app
+```
+
 ## Why a GUI App Instead of Command Line?
 
 This project is implemented as a GUI application rather than a command-line tool due to **Apple's rate limiting policies** for Foundation Models:
@@ -60,24 +71,41 @@ This project is implemented as a GUI application rather than a command-line tool
 
 **⚠️ 重要提醒**: 由于苹果 FoundationModels 当前的限制，您仍然可能遇到速率限制。如果遇到这种情况，请重启服务器。
 
+**Menu bar note**: The app runs as a menu bar app, so it is only the foreground app while its panel is open. In practice a regular window loses foreground status too as soon as you switch to another app. When the system rate-limits a request, the server returns HTTP `429` so OpenAI-compatible clients back off and retry.
+
 
 ## Usage
 
 ### Starting the Server
 
-1. Launch the app
-2. Configure server settings (default: `127.0.0.1:11535`)
-3. Click "Start Server"
+1. Launch the app — a brain icon appears in the menu bar (there is no Dock icon or main window)
+2. Click the icon to open the panel and configure server settings (default: `127.0.0.1:11535`)
+3. Click "Start Server" — the menu bar icon fills in while the server is running
 4. Server will be available at the configured address
+5. Use the "Quit" button (⌘Q) at the bottom of the panel to exit the app
 
 ### Available Endpoints
 
 Once the server is running, you can access these OpenAI-compatible endpoints:
 
 - `GET /health` - Health check
-- `GET /status` - Model availability and status
-- `GET /v1/models` - List available models
+- `GET /status` - Model availability and status, including a `models` array with each model's availability and reason
+- `GET /v1/models` - List models that are currently available on this Mac
 - `POST /v1/chat/completions` - Chat completions (streaming and non-streaming)
+
+### Models
+
+Pick a model with the OpenAI `model` field:
+
+| Model ID | Description | Requirements |
+|---|---|---|
+| `apple-on-device` | On-device model, general use (default) | macOS 26 + Apple Intelligence |
+| `apple-on-device-content-tagging` | Same on-device model tuned for tagging / classification; returns short tags | macOS 26 + Apple Intelligence |
+| `apple-private-cloud-compute` | Apple's larger server model via Private Cloud Compute | macOS 27 |
+
+- Unknown model IDs (e.g. `gpt-4o` sent by default from existing clients) fall back to `apple-on-device`; the response's `model` field shows the model actually used.
+- Requesting an unavailable model returns HTTP `503` with the reason (streaming requests receive the error as an SSE event).
+- The on-device model variant (e.g. `core3` / `coreAdvanced3`) is chosen by the system per device and cannot be selected.
 
 ### Example Usage
 
@@ -124,7 +152,9 @@ for chunk in response:
 You can use the included test script to verify the server is working correctly and see example usage patterns:
 
 ```bash
-python3 test_server.py
+python3 -m venv .venv
+.venv/bin/pip install openai requests
+.venv/bin/python test_server.py
 ```
 
 The test script will:
@@ -141,7 +171,7 @@ Make sure the server is running before executing the test script. The script pro
 
 This server implements the OpenAI Chat Completions API with the following supported parameters:
 
-- `model` - Model identifier (use "apple-on-device")
+- `model` - Model identifier (see [Models](#models); defaults to `apple-on-device`)
 - `messages` - Array of conversation messages
 - `temperature` - Sampling temperature (0.0 to 2.0)
 - `max_tokens` - Maximum tokens in response

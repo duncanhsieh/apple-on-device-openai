@@ -6,13 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a macOS SwiftUI application that creates an OpenAI-compatible API server using Apple's on-device Foundation Models. The server exposes local Apple Intelligence models through familiar OpenAI API endpoints, enabling developers to use Apple's on-device AI with existing OpenAI-compatible tools.
 
-**Important**: This is a GUI application (not a CLI tool) to avoid Apple's rate limiting policies for Foundation Models. Command-line tools are rate-limited, but foreground GUI apps are not.
+**Important**: This is a GUI application (not a CLI tool) to avoid Apple's rate limiting policies for Foundation Models. Command-line tools are rate-limited, but foreground GUI apps are not. It runs as a menu bar app (`MenuBarExtra` + `INFOPLIST_KEY_LSUIElement = YES`), so it has no Dock icon or main window.
 
 ## Requirements
 
 - macOS 26 beta 2 or newer
 - Xcode 26 beta 2 (for building)
 - Apple Intelligence must be enabled in Settings > Apple Intelligence & Siri
+- Private Cloud Compute model requires macOS 27 (APIs are guarded with `#available(macOS 27.0, *)`; deployment target is 26.0)
 - Device must support Apple Intelligence (Mac with Apple Silicon)
 
 ## Building and Running
@@ -23,9 +24,23 @@ open AppleOnDeviceOpenAI.xcodeproj
 # Then build and run using Xcode (Cmd+R)
 ```
 
+### Build from the command line:
+```bash
+xcodebuild -project AppleOnDeviceOpenAI.xcodeproj -scheme AppleOnDeviceOpenAI \
+  -configuration Debug -derivedDataPath build \
+  CODE_SIGN_IDENTITY="-" CODE_SIGNING_REQUIRED=NO DEVELOPMENT_TEAM="" build
+open build/Build/Products/Debug/AppleOnDeviceOpenAI.app
+```
+
+The app is sandboxed, so `kill`/`pkill` may not stop it; quit it with:
+```bash
+osascript -e 'tell application id "com.littlecarved.AppleOnDeviceOpenAI" to quit'
+```
+
 ### Testing the server:
 ```bash
-python3 test_server.py
+python3 -m venv .venv && .venv/bin/pip install openai requests
+.venv/bin/python test_server.py
 ```
 
 The test script verifies server health, model availability, OpenAI SDK compatibility, multi-turn conversations, multilingual support, and streaming functionality.
@@ -33,6 +48,15 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 ## Architecture
 
 ### Core Components
+
+**AppleOnDeviceOpenAIApp** (`AppleOnDeviceOpenAIApp.swift`)
+- Owns the single `ServerViewModel` and shows `ContentView` in a `MenuBarExtra` (`.window` style)
+- Menu bar icon switches to the filled symbol while the server is running
+
+**AppleModel** (`Services/OnDeviceModelManager.swift`)
+- Enum of models selectable through the OpenAI `model` field: `apple-on-device`, `apple-on-device-content-tagging`, `apple-private-cloud-compute`
+- `init(requested:)` falls back to `apple-on-device` for unknown ids
+- `availability()` and `makeSession(transcript:)` per model; PCC is only available on macOS 27+
 
 **VaporServerManager** (`Services/VaporServerManager.swift`)
 - Main HTTP server using the Vapor framework
@@ -47,9 +71,11 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 - Converts OpenAI chat messages to Apple's Transcript format
 - Handles conversation context by converting message history to transcript entries
 - Supports temperature and max_tokens parameters
+- `httpStatus(for:)` maps rate limit / PCC quota errors to 429
 
 **ContentView** (`ContentView.swift`)
-- Main UI with server configuration and status
+- Menu bar panel UI with server configuration and status; receives the shared `ServerViewModel`
+- Lists every model with its availability, plus a Quit button
 - Displays server URLs, endpoints, and integration examples
 - Provides network interface picker for bind address (127.0.0.1, 0.0.0.0, or specific IPs)
 - Includes refresh button to rescan network interfaces
@@ -64,13 +90,13 @@ The test script verifies server health, model availability, OpenAI SDK compatibi
 ### Message Flow
 
 1. Client sends OpenAI-compatible request to `/v1/chat/completions`
-2. VaporServerManager validates request and extracts messages array
+2. VaporServerManager validates request, extracts messages array, and resolves `AppleModel` from the `model` field
 3. OnDeviceModelManager converts message history (excluding last message) to Transcript entries
 4. System messages → Transcript.Instructions
 5. User messages → Transcript.Prompt
 6. Assistant messages → Transcript.Response
 7. Last message becomes the current prompt
-8. LanguageModelSession is created with conversation transcript
+8. LanguageModelSession is created for the selected model with conversation transcript
 9. Response is generated and returned in OpenAI format
 
 ### Streaming Implementation
@@ -86,8 +112,8 @@ Streaming uses Server-Sent Events (SSE):
 ## API Endpoints
 
 - `GET /health` - Health check (returns 200 OK)
-- `GET /status` - Model availability, supported languages, server version
-- `GET /v1/models` - List available models (OpenAI-compatible)
+- `GET /status` - Model availability, supported languages, server version, per-model `models` array
+- `GET /v1/models` - List currently available models (OpenAI-compatible)
 - `POST /v1/chat/completions` - Chat completions (streaming and non-streaming)
 
 Default server address: `http://127.0.0.1:11535`
